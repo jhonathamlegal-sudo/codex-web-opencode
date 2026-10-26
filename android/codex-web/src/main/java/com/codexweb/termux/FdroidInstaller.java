@@ -88,10 +88,20 @@ public final class FdroidInstaller {
         return result;
     }
 
+    public static List<Component> requiredMissing(Context context) {
+        List<Component> result = new ArrayList<>();
+        for (Component component : COMPONENTS) {
+            if (component.required && !installed(context, component.packageName)) result.add(component);
+        }
+        return result;
+    }
+
     public static String summary(Context context) {
         List<Component> missing = missing(context);
         if (missing.isEmpty()) return "Termux e extensões detectados.";
-        StringBuilder result = new StringBuilder("Faltando: ");
+        StringBuilder result = new StringBuilder();
+        if (requiredMissing(context).isEmpty()) result.append("Obrigatórios prontos. Opcional ausente: ");
+        else result.append("Faltando: ");
         for (int i = 0; i < missing.size(); i++) {
             if (i > 0) result.append(", ");
             result.append(missing.get(i).name);
@@ -123,6 +133,12 @@ public final class FdroidInstaller {
         Component completed = waitingForInstall;
         waitingForInstall = null;
         if (status != PackageInstaller.STATUS_SUCCESS) {
+            if (!completed.required) {
+                callback.status("Não foi possível instalar " + completed.name + ". É opcional; continuando sem ele.");
+                next++;
+                installNext();
+                return;
+            }
             running = false;
             callback.status("Não foi possível instalar " + completed.name + (message == null ? "." : ": " + message));
             callback.finished(false);
@@ -149,8 +165,16 @@ public final class FdroidInstaller {
             } catch (Exception error) {
                 activity.runOnUiThread(() -> {
                     running = false;
-                    callback.status("Falha ao baixar " + component.name + ": " + safeMessage(error));
-                    callback.finished(false);
+                    String message = "Falha ao baixar " + component.name + ": " + safeMessage(error);
+                    if (!component.required) {
+                        callback.status(message + ". É opcional; continuando sem ele.");
+                        next++;
+                        running = true;
+                        installNext();
+                    } else {
+                        callback.status(message);
+                        callback.finished(false);
+                    }
                 });
             }
         });
@@ -231,16 +255,23 @@ public final class FdroidInstaller {
             session.commit(pending.getIntentSender());
             session.close();
         } catch (Exception error) {
-            running = false;
-            callback.status("Falha ao preparar " + component.name + ": " + safeMessage(error));
-            callback.finished(false);
+            String message = "Falha ao preparar " + component.name + ": " + safeMessage(error);
+            if (!component.required) {
+                callback.status(message + ". É opcional; continuando sem ele.");
+                next++;
+                installNext();
+            } else {
+                running = false;
+                callback.status(message);
+                callback.finished(false);
+            }
         }
     }
 
     private static HttpURLConnection connection(String address) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
         connection.setConnectTimeout(15000);
-        connection.setReadTimeout(30000);
+        connection.setReadTimeout(120000);
         connection.setInstanceFollowRedirects(true);
         connection.setRequestProperty("User-Agent", "CodexWeb-Installer/1.0");
         if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {

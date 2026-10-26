@@ -294,7 +294,7 @@ public final class MainActivity extends Activity {
     private void refreshInstallerState() {
         String summary = FdroidInstaller.summary(this);
         componentsStatus.setText(summary);
-        if (!FdroidInstaller.missing(this).isEmpty()) {
+        if (!FdroidInstaller.requiredMissing(this).isEmpty()) {
             setState("PREPARAÇÃO", AMBER, "Ambiente incompleto", "Instale os componentes oficiais para liberar a conexão automática.", false);
             primaryAction.setText("Instalar componentes");
             primaryAction.setEnabled(true);
@@ -350,14 +350,14 @@ public final class MainActivity extends Activity {
                     installComponentsAction.setText("Tentar instalação novamente");
                     return;
                 }
-                componentsStatus.setText("Todos os componentes estão prontos.");
+                componentsStatus.setText(FdroidInstaller.summary(MainActivity.this));
                 startTermuxAndServer();
             }
         });
     }
 
     private void startTermuxAndServer() {
-        if (!FdroidInstaller.missing(this).isEmpty()) {
+        if (!FdroidInstaller.requiredMissing(this).isEmpty()) {
             refreshInstallerState();
             return;
         }
