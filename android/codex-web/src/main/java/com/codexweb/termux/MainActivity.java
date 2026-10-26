@@ -1,0 +1,586 @@
+package com.codexweb.termux;
+
+import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
+import android.view.View;
+import android.view.Window;
+import android.webkit.HttpAuthHandler;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.Collections;
+import java.util.Random;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public final class MainActivity extends Activity {
+    private static final String TERMUX_PACKAGE = "com.termux";
+    private static final String TERMUX_SERVICE = "com.termux.app.RunCommandService";
+    private static final String SERVER_URL = "http://127.0.0.1:4096";
+    private static final String SERVER_INFO_URL = SERVER_URL + "/api/info";
+    private static final int MAX_PROBES = 60;
+    private static final String PREFS = "codex_web";
+    private static final String PASSWORD_KEY = "server_password";
+    private static final String SETUP_COMMAND =
+            "mkdir -p ~/.termux && " +
+            "(grep -qxF 'allow-external-apps=true' ~/.termux/termux.properties 2>/dev/null || " +
+            "echo 'allow-external-apps=true' >> ~/.termux/termux.properties)";
+
+    private static final int BG = Color.rgb(10, 12, 16);
+    private static final int SURFACE = Color.rgb(21, 25, 32);
+    private static final int SURFACE_2 = Color.rgb(28, 33, 42);
+    private static final int TEXT = Color.rgb(245, 247, 250);
+    private static final int MUTED = Color.rgb(159, 169, 184);
+    private static final int GREEN = Color.rgb(107, 231, 157);
+    private static final int BLUE = Color.rgb(111, 174, 255);
+    private static final int AMBER = Color.rgb(255, 194, 92);
+    private static final int RED = Color.rgb(255, 118, 118);
+
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private ScrollView setupView;
+    private WebView webView;
+    private TextView stateChip;
+    private TextView connectionTitle;
+    private TextView connectionDetail;
+    private TextView setupHint;
+    private TextView codeBlock;
+    private ProgressBar progress;
+    private Button primaryAction;
+    private Button openTermuxAction;
+    private Button copyAction;
+    private Button installComponentsAction;
+    private TextView componentsStatus;
+    private FdroidInstaller fdroidInstaller;
+    private BroadcastReceiver installReceiver;
+    private int probeCount;
+    private String serverPassword;
+
+    @Override
+    protected void onCreate(Bundle state) {
+        super.onCreate(state);
+        Window window = getWindow();
+        window.setStatusBarColor(BG);
+        window.setNavigationBarColor(BG);
+        serverPassword = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PASSWORD_KEY, null);
+        if (serverPassword == null) {
+            serverPassword = randomPassword();
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PASSWORD_KEY, serverPassword).apply();
+        }
+        fdroidInstaller = new FdroidInstaller(this);
+        installReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (fdroidInstaller != null) fdroidInstaller.onInstallResult(intent);
+            }
+        };
+        IntentFilter filter = new IntentFilter(FdroidInstaller.INSTALL_ACTION);
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(installReceiver, filter, RECEIVER_NOT_EXPORTED);
+        else registerReceiver(installReceiver, filter);
+        buildUi();
+        refreshInstallerState();
+    }
+
+    private void buildUi() {
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(BG);
+
+        setupView = new ScrollView(this);
+        setupView.setFillViewport(true);
+        setupView.setClipToPadding(false);
+        LinearLayout content = column(20, 24, 20, 28);
+        setupView.addView(content, new ScrollView.LayoutParams(-1, -2));
+        root.addView(setupView, new FrameLayout.LayoutParams(-1, -1));
+
+        webView = new WebView(this);
+        configureWebView(webView);
+        webView.setVisibility(View.GONE);
+        root.addView(webView, new FrameLayout.LayoutParams(-1, -1));
+
+        LinearLayout brandRow = new LinearLayout(this);
+        brandRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView mark = text("C", 22, TEXT, true);
+        mark.setGravity(Gravity.CENTER);
+        mark.setBackground(circle(GREEN));
+        brandRow.addView(mark, new LinearLayout.LayoutParams(dp(46), dp(46)));
+        LinearLayout brandText = column(0, 0, 0, 0);
+        TextView title = text("Codex Web", 28, TEXT, true);
+        TextView subtitle = text("IA local, com o poder do seu Termux", 14, MUTED, false);
+        brandText.addView(title);
+        brandText.addView(subtitle, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams brandTextParams = new LinearLayout.LayoutParams(0, -2, 1);
+        brandTextParams.leftMargin = dp(14);
+        brandRow.addView(brandText, brandTextParams);
+        content.addView(brandRow);
+
+        LinearLayout statusRow = new LinearLayout(this);
+        statusRow.setGravity(Gravity.CENTER_VERTICAL);
+        stateChip = text("VERIFICANDO…", 11, BG, true);
+        stateChip.setGravity(Gravity.CENTER);
+        stateChip.setPadding(dp(12), dp(7), dp(12), dp(7));
+        stateChip.setBackground(round(AMBER, 24));
+        statusRow.addView(stateChip, new LinearLayout.LayoutParams(-2, -2));
+        TextView privacy = text("  •  conexão somente neste aparelho", 12, MUTED, false);
+        statusRow.addView(privacy, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(-1, -2);
+        statusParams.topMargin = dp(18);
+        content.addView(statusRow, statusParams);
+
+        LinearLayout connectionCard = card();
+        connectionCard.addView(text("CONEXÃO", 11, BLUE, true));
+        connectionTitle = text("Preparando seu workspace…", 20, TEXT, true);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(-1, -2);
+        titleParams.topMargin = dp(9);
+        connectionCard.addView(connectionTitle, titleParams);
+        connectionDetail = text("O serviço será iniciado no Termux em segundo plano; você não precisa digitar comandos.", 14, MUTED, false);
+        LinearLayout.LayoutParams detailParams = new LinearLayout.LayoutParams(-1, -2);
+        detailParams.topMargin = dp(7);
+        connectionCard.addView(connectionDetail, detailParams);
+        progress = new ProgressBar(this);
+        progress.setIndeterminate(true);
+        progress.setVisibility(View.VISIBLE);
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(dp(28), dp(28));
+        progressParams.topMargin = dp(16);
+        connectionCard.addView(progress, progressParams);
+        content.addView(connectionCard, marginTop(dp(22)));
+
+        LinearLayout installerCard = card();
+        installerCard.addView(text("Instalador do ambiente", 17, TEXT, true));
+        TextView installerHint = text("Verifica o Termux e as extensões oficiais antes de iniciar o servidor.", 14, MUTED, false);
+        LinearLayout.LayoutParams installerHintParams = new LinearLayout.LayoutParams(-1, -2);
+        installerHintParams.topMargin = dp(7);
+        installerCard.addView(installerHint, installerHintParams);
+        componentsStatus = text("Verificando componentes…", 14, AMBER, true);
+        LinearLayout.LayoutParams componentsParams = new LinearLayout.LayoutParams(-1, -2);
+        componentsParams.topMargin = dp(14);
+        installerCard.addView(componentsStatus, componentsParams);
+        installComponentsAction = actionButton("Verificar e instalar", true);
+        installComponentsAction.setOnClickListener(v -> installComponents());
+        LinearLayout.LayoutParams installButtonParams = new LinearLayout.LayoutParams(-1, dp(48));
+        installButtonParams.topMargin = dp(14);
+        installerCard.addView(installComponentsAction, installButtonParams);
+        content.addView(installerCard, marginTop(dp(14)));
+
+        primaryAction = actionButton("Iniciar conexão", true);
+        primaryAction.setOnClickListener(v -> startTermuxAndServer());
+        content.addView(primaryAction, marginTop(dp(16)));
+
+        LinearLayout secondaryRow = new LinearLayout(this);
+        secondaryRow.setGravity(Gravity.CENTER);
+        openTermuxAction = actionButton("Abrir Termux", false);
+        openTermuxAction.setOnClickListener(v -> openTermux());
+        copyAction = actionButton("Copiar comando", false);
+        copyAction.setOnClickListener(v -> copySetupCommand());
+        secondaryRow.addView(openTermuxAction, new LinearLayout.LayoutParams(0, dp(48), 1));
+        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(0, dp(48), 1);
+        copyParams.leftMargin = dp(10);
+        secondaryRow.addView(copyAction, copyParams);
+        content.addView(secondaryRow, marginTop(dp(10)));
+
+        LinearLayout setupCard = card();
+        setupCard.addView(text("Configuração única", 17, TEXT, true));
+        setupHint = text("Se o Termux bloquear o comando externo, copie este comando, cole no Termux e reinicie o aplicativo.", 14, MUTED, false);
+        LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(-1, -2);
+        hintParams.topMargin = dp(7);
+        setupCard.addView(setupHint, hintParams);
+        codeBlock = text(SETUP_COMMAND, 12, Color.rgb(204, 218, 232), false);
+        codeBlock.setTypeface(Typeface.MONOSPACE);
+        codeBlock.setTextIsSelectable(true);
+        codeBlock.setPadding(dp(13), dp(13), dp(13), dp(13));
+        codeBlock.setBackground(round(Color.rgb(12, 15, 20), 12));
+        LinearLayout.LayoutParams codeParams = new LinearLayout.LayoutParams(-1, -2);
+        codeParams.topMargin = dp(14);
+        setupCard.addView(codeBlock, codeParams);
+        content.addView(setupCard, marginTop(dp(22)));
+
+        LinearLayout stepsCard = card();
+        stepsCard.addView(text("Como funciona", 17, TEXT, true));
+        addStep(stepsCard, "1", "Termux instalado", "O backend permanece no armazenamento privado do Termux.", GREEN);
+        addStep(stepsCard, "2", "Permissão externa", "Permite que este APK peça ao Termux para iniciar o servidor.", AMBER);
+        addStep(stepsCard, "3", "Chat conectado", "O chat, sessões, modelos e ferramentas são carregados do servidor real.", BLUE);
+        content.addView(stepsCard, marginTop(dp(14)));
+
+        TextView footer = text("Codex Web  •  servidor local  •  sem chave dentro do APK", 12, Color.rgb(112, 123, 139), false);
+        footer.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams footerParams = new LinearLayout.LayoutParams(-1, -2);
+        footerParams.topMargin = dp(24);
+        content.addView(footer, footerParams);
+        setContentView(root);
+    }
+
+    private void configureWebView(WebView view) {
+        WebSettings settings = view.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        view.setWebChromeClient(new WebChromeClient());
+        view.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onReceivedHttpAuthRequest(WebView current, HttpAuthHandler handler, String host, String realm) {
+                if ("127.0.0.1".equals(host) || "localhost".equals(host)) handler.proceed("opencode", serverPassword);
+                else handler.cancel();
+            }
+
+            @Override
+            public void onReceivedError(WebView current, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame()) showServerFailure();
+            }
+        });
+    }
+
+    private void addStep(LinearLayout parent, String number, String title, String detail, int color) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.TOP);
+        TextView badge = text(number, 13, BG, true);
+        badge.setGravity(Gravity.CENTER);
+        badge.setBackground(circle(color));
+        row.addView(badge, new LinearLayout.LayoutParams(dp(28), dp(28)));
+        LinearLayout body = column(0, 0, 0, 0);
+        body.addView(text(title, 15, TEXT, true));
+        TextView copy = text(detail, 13, MUTED, false);
+        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(-1, -2);
+        copyParams.topMargin = dp(3);
+        body.addView(copy, copyParams);
+        LinearLayout.LayoutParams bodyParams = new LinearLayout.LayoutParams(0, -2, 1);
+        bodyParams.leftMargin = dp(12);
+        row.addView(body, bodyParams);
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, -2);
+        rowParams.topMargin = dp(18);
+        parent.addView(row, rowParams);
+    }
+
+    private boolean isTermuxInstalled() {
+        return FdroidInstaller.installed(this, TERMUX_PACKAGE);
+    }
+
+    private void refreshInstallerState() {
+        String summary = FdroidInstaller.summary(this);
+        componentsStatus.setText(summary);
+        if (!FdroidInstaller.missing(this).isEmpty()) {
+            setState("PREPARAÇÃO", AMBER, "Ambiente incompleto", "Instale os componentes oficiais para liberar a conexão automática.", false);
+            primaryAction.setText("Instalar componentes");
+            primaryAction.setEnabled(true);
+            primaryAction.setOnClickListener(v -> installComponents());
+            openTermuxAction.setVisibility(View.GONE);
+            progress.setVisibility(View.GONE);
+            return;
+        }
+        installComponentsAction.setText("Componentes prontos");
+        installComponentsAction.setEnabled(false);
+        if (isTermuxInstalled()) startTermuxAndServer();
+    }
+
+    private void installComponents() {
+        if (fdroidInstaller == null || fdroidInstaller.isRunning()) return;
+        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            setState("PERMISSÃO", AMBER, "Permita instalações pelo Codex Web", "O Android exige sua autorização antes de instalar APKs do F-Droid.", false);
+            componentsStatus.setText("Toque novamente após habilitar a permissão nas configurações.");
+            try {
+                startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + getPackageName())));
+            } catch (ActivityNotFoundException ignored) {
+                startActivity(new Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS));
+            }
+            return;
+        }
+        primaryAction.setEnabled(false);
+        installComponentsAction.setEnabled(false);
+        setState("INSTALANDO", AMBER, "Preparando componentes…", "O Android exibirá uma confirmação para cada APK.", true);
+        fdroidInstaller.start(this, new FdroidInstaller.Callback() {
+            @Override
+            public void status(String message) {
+                componentsStatus.setText(message);
+            }
+
+            @Override
+            public void permissionRequired() {
+                installComponentsAction.setEnabled(true);
+                setState("PERMISSÃO", AMBER, "Permita instalações pelo Codex Web", "O Android exige sua autorização antes de instalar APKs do F-Droid.", false);
+                try {
+                    startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:" + getPackageName())));
+                } catch (ActivityNotFoundException ignored) {
+                    startActivity(new Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS));
+                }
+            }
+
+            @Override
+            public void finished(boolean success) {
+                refreshInstallerState();
+                if (!success) {
+                    installComponentsAction.setEnabled(true);
+                    installComponentsAction.setText("Tentar instalação novamente");
+                    return;
+                }
+                componentsStatus.setText("Todos os componentes estão prontos.");
+                startTermuxAndServer();
+            }
+        });
+    }
+
+    private void startTermuxAndServer() {
+        if (!FdroidInstaller.missing(this).isEmpty()) {
+            refreshInstallerState();
+            return;
+        }
+        if (!isTermuxInstalled()) {
+            showTermuxMissing();
+            return;
+        }
+        setState("CONECTANDO", AMBER, "Iniciando o Termux…", "Solicitando ao Termux que execute o servidor local.", true);
+        openTermuxAction.setVisibility(View.VISIBLE);
+        primaryAction.setEnabled(false);
+        mainHandler.postDelayed(() -> {
+            try {
+                sendRunCommand();
+                probeCount = 0;
+                probeServer();
+            } catch (SecurityException error) {
+                showExternalAppsInstructions();
+            }
+        }, 850);
+    }
+
+    private void sendRunCommand() {
+        String command = "export OPENCODE_SERVER_PASSWORD='" + shellQuote(serverPassword)
+                + "'; exec bash \"$HOME/opencode/android/codex-web/termux-start.sh\"";
+        Intent intent = new Intent("com.termux.RUN_COMMAND");
+        intent.setClassName(TERMUX_PACKAGE, TERMUX_SERVICE);
+        intent.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash");
+        intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{"-lc", command});
+        intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
+        intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
+        startService(intent);
+    }
+
+    private void probeServer() {
+        executor.execute(() -> {
+            boolean ready = false;
+            try {
+                HttpURLConnection connection = (HttpURLConnection) new URL(SERVER_INFO_URL).openConnection();
+                connection.setConnectTimeout(700);
+                connection.setReadTimeout(1200);
+                String credentials = "opencode:" + serverPassword;
+                String encoded = Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
+                connection.setRequestProperty("Authorization", "Basic " + encoded);
+                ready = connection.getResponseCode() == HttpURLConnection.HTTP_OK;
+                connection.disconnect();
+            } catch (IOException ignored) {
+                // The server may still be booting.
+            }
+            boolean finalReady = ready;
+            mainHandler.post(() -> {
+                if (finalReady) showWebView();
+                else if (++probeCount < MAX_PROBES) {
+                    connectionDetail.setText("Servidor local iniciando… " + probeCount + "/" + MAX_PROBES);
+                    mainHandler.postDelayed(this::probeServer, 1000);
+                } else showServerFailure();
+            });
+        });
+    }
+
+    private void showWebView() {
+        setupView.setVisibility(View.GONE);
+        webView.setVisibility(View.VISIBLE);
+        String credentials = "opencode:" + serverPassword;
+        String encoded = Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
+        String authToken = Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
+        String url = SERVER_URL + "/?auth_token=" + Uri.encode(authToken);
+        webView.loadUrl(url, Collections.singletonMap("Authorization", "Basic " + encoded));
+    }
+
+    private void showTermuxMissing() {
+        setState("TERMUX AUSENTE", RED, "Termux não encontrado", "Use o instalador guiado para baixar o Termux e suas extensões do F-Droid.", false);
+        primaryAction.setText("Instalar componentes");
+        primaryAction.setEnabled(true);
+        primaryAction.setOnClickListener(v -> installComponents());
+        openTermuxAction.setVisibility(View.GONE);
+        progress.setVisibility(View.GONE);
+    }
+
+    private void showExternalAppsInstructions() {
+        setState("AÇÃO NECESSÁRIA", AMBER, "Permissão externa bloqueada", "O Termux está instalado, mas ainda não aceita comandos enviados por outros aplicativos.", false);
+        setupHint.setText("No Termux, execute o comando abaixo. Depois feche e abra o Termux novamente e toque em Verificar conexão.");
+        primaryAction.setText("Verificar conexão");
+        primaryAction.setEnabled(true);
+        primaryAction.setOnClickListener(v -> startTermuxAndServer());
+        openTermuxAction.setVisibility(View.VISIBLE);
+        copyAction.setVisibility(View.VISIBLE);
+        progress.setVisibility(View.GONE);
+    }
+
+    private void showServerFailure() {
+        setState("SERVIDOR OFFLINE", RED, "Não foi possível conectar ao servidor", "Verifique o log ~/.cache/codex-web/server.log no Termux e confirme se ~/opencode está completo.", false);
+        setupHint.setText("Se esta é a primeira execução, habilite a permissão externa abaixo, reinicie o Termux e tente novamente.");
+        primaryAction.setText("Tentar novamente");
+        primaryAction.setEnabled(true);
+        primaryAction.setOnClickListener(v -> startTermuxAndServer());
+        openTermuxAction.setVisibility(View.VISIBLE);
+        copyAction.setVisibility(View.VISIBLE);
+        progress.setVisibility(View.GONE);
+    }
+
+    private void setState(String chip, int chipColor, String title, String detail, boolean busy) {
+        stateChip.setText(chip);
+        stateChip.setTextColor(BG);
+        stateChip.setBackground(round(chipColor, 24));
+        connectionTitle.setText(title);
+        connectionDetail.setText(detail);
+        progress.setVisibility(busy ? View.VISIBLE : View.GONE);
+    }
+
+    private void openTermux() {
+        Intent launch = getPackageManager().getLaunchIntentForPackage(TERMUX_PACKAGE);
+        if (launch != null) {
+            try {
+                startActivity(launch);
+                return;
+            } catch (ActivityNotFoundException ignored) {
+                // Fall through to the store link.
+            }
+        }
+        openUrl("https://f-droid.org/packages/com.termux/");
+    }
+
+    private void copySetupCommand() {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        clipboard.setPrimaryClip(ClipData.newPlainText("Configuração do Codex Web", SETUP_COMMAND));
+        Toast.makeText(this, "Comando copiado. Cole no Termux.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void openUrl(String value) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(value)));
+        } catch (ActivityNotFoundException ignored) {
+            Toast.makeText(this, "Nenhum navegador encontrado.", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private Button actionButton(String label, boolean primary) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTextSize(14);
+        button.setAllCaps(false);
+        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        button.setTextColor(primary ? BG : TEXT);
+        button.setGravity(Gravity.CENTER);
+        button.setMinHeight(0);
+        button.setPadding(dp(12), 0, dp(12), 0);
+        button.setStateListAnimator(null);
+        button.setBackground(round(primary ? GREEN : SURFACE_2, 14));
+        return button;
+    }
+
+    private LinearLayout card() {
+        LinearLayout card = column(18, 18, 18, 18);
+        card.setBackground(round(SURFACE, 18));
+        return card;
+    }
+
+    private LinearLayout column(int left, int top, int right, int bottom) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(left), dp(top), dp(right), dp(bottom));
+        return layout;
+    }
+
+    private TextView text(String value, float size, int color, boolean bold) {
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextSize(size);
+        view.setTextColor(color);
+        view.setIncludeFontPadding(true);
+        view.setTypeface(Typeface.DEFAULT, bold ? Typeface.BOLD : Typeface.NORMAL);
+        return view;
+    }
+
+    private GradientDrawable round(int color, int radius) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(dp(radius));
+        return drawable;
+    }
+
+    private GradientDrawable circle(int color) {
+        return round(color, 100);
+    }
+
+    private LinearLayout.LayoutParams marginTop(int margin) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.topMargin = margin;
+        return params;
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private static String randomPassword() {
+        String alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+        Random random = new Random();
+        StringBuilder result = new StringBuilder(32);
+        for (int i = 0; i < 32; i++) result.append(alphabet.charAt(random.nextInt(alphabet.length())));
+        return result.toString();
+    }
+
+    private static String shellQuote(String value) {
+        return value.replace("'", "'\\''");
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (componentsStatus != null && fdroidInstaller != null && !fdroidInstaller.isRunning()
+                && webView.getVisibility() != View.VISIBLE) refreshInstallerState();
+    }
+
+    @Override
+    protected void onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null);
+        executor.shutdownNow();
+        if (installReceiver != null) unregisterReceiver(installReceiver);
+        if (fdroidInstaller != null) fdroidInstaller.close();
+        if (webView != null) webView.destroy();
+        super.onDestroy();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (webView != null && webView.getVisibility() == View.VISIBLE && webView.canGoBack()) webView.goBack();
+        else super.onBackPressed();
+    }
+}
