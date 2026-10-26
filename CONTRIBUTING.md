@@ -1,112 +1,62 @@
-# Contributing to OpenCode
+# Contribuindo
 
-The changes most likely to be accepted are:
+Obrigado por contribuir com esta edição do OpenCode para Termux e Android. O projeto combina o servidor OpenCode, a interface web e o launcher Android; mudanças pequenas, reproduzíveis e verificáveis são preferíveis a alterações amplas sem testes.
 
-- Bug fixes
-- Additional LSPs and formatters
-- LLM performance improvements
-- Environment-specific fixes
-- Missing standard behavior
-- Documentation improvements
+## Antes de começar
 
-UI and core product features require design review before implementation. If you are unsure whether a change fits, ask a maintainer or choose an issue labeled [`help wanted`](https://github.com/anomalyco/opencode/issues?q=is%3Aissue%20state%3Aopen%20label%3Ahelp-wanted), [`good first issue`](https://github.com/anomalyco/opencode/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22), [`bug`](https://github.com/anomalyco/opencode/issues?q=is%3Aissue%20state%3Aopen%20label%3Abug), or [`perf`](https://github.com/anomalyco/opencode/issues?q=is%3Aopen%20is%3Aissue%20label%3A%22perf%22).
+Leia o [`README.md`](README.md), o [`AGENTS.md`](AGENTS.md) e o [`SECURITY.md`](SECURITY.md). Nunca envie chaves de API, tokens, senhas, arquivos `.env`, sessões, logs com credenciais ou dados pessoais.
 
-Want to take on an issue? Leave a comment and a maintainer may assign it unless it is already being worked on.
-
-> [!NOTE]
-> PRs that ignore these guardrails will likely be closed.
-
-## Adding Providers
-
-New providers should rarely require OpenCode changes. Add the provider to [models.dev](https://github.com/anomalyco/models.dev) first.
-
-## Development
-
-OpenCode requires Bun 1.3 or newer. From the repository root:
+## Ambiente
 
 ```bash
-bun install
-bun dev [directory]
+git clone https://github.com/jhonathamlegal-sudo/codex-web-opencode.git
+cd codex-web-opencode
+bun install --frozen-lockfile
 ```
 
-`bun dev` runs the V2 CLI and TUI. Pass a directory to open another project, or `.` to open this repository.
-
-To test a development TUI against your installed OpenCode V2 background service and live sessions:
+Crie uma branch para cada mudança:
 
 ```bash
-bun run dev:live [directory]
+git switch -c docs/minha-mudanca
 ```
 
-For web development, run the backend and app in separate terminals. Other interfaces have root scripts:
+## Verificação
+
+Antes de abrir um pull request, execute o que for relevante para a área alterada:
 
 ```bash
-bun dev serve --port 4096
-bun run dev:web
-bun run dev:desktop
-bun run dev:www
+git diff --check
+bun run check
+cd packages/core && bun run test && bun typecheck
 ```
 
-### Packages
-
-- `packages/schema`: shared wire and storage contracts
-- `packages/core`: domain behavior and persistence
-- `packages/protocol`: public API definitions
-- `packages/server`: HTTP server and runtime composition
-- `packages/client`: generated TypeScript clients
-- `packages/cli`: command-line entrypoint and service lifecycle
-- `packages/tui`: terminal interface
-- `packages/app`: shared web interface
-- `packages/desktop`: Electron desktop application
-- `packages/plugin`: plugin API
-
-### Verification
-
-Run typechecks, and tests where defined, from the affected package rather than the repository root:
+Para alterações no cliente/API pública, regenere os artefatos quando necessário:
 
 ```bash
-cd packages/core
-bun run test
-bun typecheck
+cd packages/client
+bun run generate
 ```
 
-Follow package-specific instructions in nearby `AGENTS.md` files. After changing the public Protocol or Server `HttpApi`, run `bun run generate` from `packages/client`; never edit generated client files directly.
+Para o launcher Android e o instalador Termux:
 
-Follow the repository [style guide](./AGENTS.md).
+```bash
+cd android/codex-web
+bash -n termux-start.sh
+./gradlew assembleDebug
+```
 
-## Pull Requests
+O APK de depuração é gerado em `android/codex-web/build/`. A instalação no Android continua sujeita à confirmação do PackageInstaller; isso não deve ser contornado pelo aplicativo.
 
-### Link Issues When Required
+## Regras do launcher
 
-Bug fixes, chores, and tests must reference an existing issue. Documentation, refactor, and feature PRs are exempt from the automated linked-issue check. When required, use `Fixes #123` or `Closes #123` in the PR description.
+- O repositório público usado pelo bootstrap deve ser explícito e revisável.
+- O launcher não deve embutir chave de provedor, token do GitHub ou senha fixa.
+- O bootstrap pode instalar dependências no Termux, mas não deve apagar ou sobrescrever um checkout não vazio.
+- Falhas de rede, clonagem, instalação e inicialização devem aparecer no log e produzir uma mensagem compreensível na interface.
+- Mudanças no `AGENTS.md`, nos perfis `AGENT.md` dos modelos ou na persistência devem incluir validação ponta a ponta.
 
-Before implementing new functionality, open a feature request describing the problem, why it belongs in OpenCode, and your proposed approach if you have one. Wait for design approval before opening the implementation PR.
+## Commits e pull requests
 
-Base branches on `dev` and complete the provided pull request template.
+Use mensagens claras, por exemplo `docs: explicar o bootstrap do Termux` ou `fix(android): tratar Termux recém-instalado`. No pull request, descreva o problema, a solução, os comandos executados e as limitações conhecidas. Para mudanças Android, informe versão do Android/Termux e se o fluxo foi testado em instalação limpa.
 
-### Keep It Focused
-
-- Keep PRs small and focused.
-- Explain the problem and why the change fixes it.
-- Check whether the functionality already exists.
-- For UI changes, include before-and-after screenshots or video.
-- For logic changes, explain what you tested and how a reviewer can verify it.
-
-### Keep It Brief
-
-Long, AI-generated PR descriptions and issues may be ignored. Write a short explanation in your own words. If the change cannot be explained briefly, the PR may be too large.
-
-### Use Conventional Titles
-
-Use `type(scope): summary`. Supported types are `feat`, `fix`, `docs`, `chore`, `refactor`, and `test`. The scope is optional.
-
-Examples:
-
-- `docs: update contributing guide`
-- `fix(tui): restore scroll position`
-- `feat(app): add workspace search`
-
-## Issues
-
-Bug reports and feature requests must use their issue templates. Blank issues are not allowed; ask support and how-to questions in the [Discord community](https://discord.gg/opencode).
-
-Automated checks flag missing templates, placeholder text, AI-generated walls of text, and missing meaningful content. You have two hours to correct a flagged issue before it closes automatically. Ask a maintainer if an issue was flagged incorrectly.
+Vulnerabilidades não devem ser abertas como issue pública; siga o [`SECURITY.md`](SECURITY.md).

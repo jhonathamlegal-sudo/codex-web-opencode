@@ -1,47 +1,31 @@
-# Security
+# Segurança
 
-## IMPORTANT
+Este repositório é público e esta edição executa o OpenCode no Termux. O agente pode receber acesso aos arquivos, processos e rede disponíveis ao usuário do dispositivo. O sistema não é um sandbox de segurança.
 
-We do not accept AI generated security reports. We receive a large number of
-these and we absolutely do not have the resources to review them all. If you
-submit one that will be an automatic ban from the project.
+## Reportar uma vulnerabilidade
 
-## Threat Model
+Use um aviso privado do GitHub:
 
-### Overview
+<https://github.com/jhonathamlegal-sudo/codex-web-opencode/security/advisories/new>
 
-OpenCode is an AI-powered coding assistant that runs locally on your machine. It provides an agent system with access to powerful tools including shell execution, file operations, and web access.
+Inclua apenas os detalhes necessários para reproduzir o problema, o impacto, a versão/commit afetado e uma correção sugerida, se houver. Não publique chaves, dados pessoais ou uma prova de conceito destrutiva. Se o formulário não estiver disponível, abra uma comunicação privada pelos canais do mantenedor; não use uma issue pública para um segredo ativo.
 
-### No Sandbox
+## Segredos e configuração
 
-OpenCode does **not** sandbox the agent. The permission system exists as a UX feature to help users stay aware of what actions the agent is taking - it prompts for confirmation before executing commands, writing files, etc. However, it is not designed to provide security isolation.
+- Nunca faça commit de chaves de API, tokens do GitHub, senhas, cookies, arquivos `.env` ou dumps de sessão.
+- Configure a chave do provedor somente no dispositivo, por exemplo em `~/.config/opencode/apinex.env`, com permissões restritas (`chmod 600`).
+- O APK e o script público não devem conter a chave APINEX nem credenciais do GitHub.
+- Se uma credencial for exposta, revogue-a e gere outra imediatamente; apagar o arquivo não remove o segredo do histórico.
+- Ao compartilhar logs, redija valores de `Authorization`, cookies, chaves e senhas.
 
-If you need true isolation, run OpenCode inside a Docker container or VM.
+## Rede local e Termux
 
-### Server Mode
+O servidor local deve escutar em `127.0.0.1:4096` quando usado pelo launcher. A senha HTTP deve ser aleatória por execução e não deve ser publicada. Não exponha a porta diretamente à internet; use uma camada de acesso autenticada e compreenda o risco antes de alterar o bind.
 
-Server mode is opt-in only. When enabled, set `OPENCODE_SERVER_PASSWORD` to require HTTP Basic Auth. Without this, the server runs unauthenticated (with a warning). It is the end user's responsibility to secure the server - any functionality it provides is not a vulnerability.
+O Android pode pedir confirmação para instalar o Termux e seus complementos. Essa confirmação é intencional. Mantenha Android, Termux e os complementos atualizados e revise scripts baixados antes de executá-los.
 
-### Out of Scope
+O bootstrap clona uma URL pública explícita e não deve apagar um diretório de projeto não vazio. Como o repositório é público, qualquer pessoa pode baixar e inspecionar seu conteúdo; não coloque material privado no código, no APK ou na documentação.
 
-| Category                        | Rationale                                                               |
-| ------------------------------- | ----------------------------------------------------------------------- |
-| **Server access when opted-in** | If you enable server mode, API access is expected behavior              |
-| **Sandbox escapes**             | The permission system is not a sandbox (see above)                      |
-| **LLM provider data handling**  | Data sent to your configured LLM provider is governed by their policies |
-| **MCP server behavior**         | External MCP servers you configure are outside our trust boundary       |
-| **Malicious config files**      | Users control their own config; modifying it is not an attack vector    |
+## Escopo e limitações
 
----
-
-# Reporting Security Issues
-
-We appreciate your efforts to responsibly disclose your findings, and will make every effort to acknowledge your contributions.
-
-To report a security issue, please use the GitHub Security Advisory ["Report a Vulnerability"](https://github.com/anomalyco/opencode/security/advisories/new) tab.
-
-The team will send a response indicating the next steps in handling your report. After the initial reply to your report, the security team will keep you informed of the progress towards a fix and full announcement, and may ask for additional information or guidance.
-
-## Escalation
-
-If you do not receive an acknowledgement of your report within 6 business days, you may send an email to security@anoma.ly
+Este documento cobre o código deste repositório, o launcher Android e o bootstrap Termux. Vulnerabilidades exclusivamente no provedor de modelos, no GitHub, no Android, no Termux upstream, em servidores MCP de terceiros ou em um dispositivo fisicamente comprometido devem ser reportadas ao mantenedor correspondente, além de serem informadas aqui quando afetarem este projeto.
