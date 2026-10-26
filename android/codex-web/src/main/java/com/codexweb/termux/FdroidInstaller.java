@@ -9,9 +9,6 @@ import android.content.pm.PackageManager;
 import android.content.pm.PackageInstaller;
 import android.os.Build;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -20,24 +17,23 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Guided, user-confirmed installation of the Termux components from F-Droid. */
+/** Guided, user-confirmed installation of the bundled Termux components. */
 public final class FdroidInstaller {
     public static final String INSTALL_ACTION = "com.codexweb.termux.FDROID_INSTALL_RESULT";
-    private static final String API = "https://f-droid.org/api/v1/packages/";
-    private static final String APK_BASE = "https://f-droid.org/repo/";
 
     public static final Component[] COMPONENTS = new Component[]{
-            new Component("Termux", "com.termux", true),
-            new Component("Termux:API", "com.termux.api", true),
-            new Component("Termux:Boot", "com.termux.boot", true),
-            new Component("Termux:Widget", "com.termux.widget", false)
+            new Component("Termux", "com.termux", true, "fdroid/com.termux_1022.apk"),
+            new Component("Termux:API", "com.termux.api", true, "fdroid/com.termux.api_1002.apk"),
+            new Component("Termux:Boot", "com.termux.boot", true, "fdroid/com.termux.boot_1000.apk"),
+            new Component("Termux:Widget", "com.termux.widget", false, "fdroid/com.termux.widget_1001.apk")
     };
 
     public interface Callback {
@@ -50,11 +46,13 @@ public final class FdroidInstaller {
         public final String name;
         public final String packageName;
         public final boolean required;
+        public final String assetName;
 
-        Component(String name, String packageName, boolean required) {
+        Component(String name, String packageName, boolean required, String assetName) {
             this.name = name;
             this.packageName = packageName;
             this.required = required;
+            this.assetName = assetName;
         }
     }
 
@@ -157,15 +155,15 @@ public final class FdroidInstaller {
             return;
         }
         final Component component = missing.get(next);
-        callback.status("Baixando " + component.name + " do F-Droid…");
+        callback.status("Preparando APK embutido de " + component.name + "…");
         executor.execute(() -> {
             try {
-                File apk = download(component);
+                File apk = prepare(component);
                 activity.runOnUiThread(() -> stageInstall(component, apk));
             } catch (Exception error) {
                 activity.runOnUiThread(() -> {
                     running = false;
-                    String message = "Falha ao baixar " + component.name + ": " + safeMessage(error);
+                    String message = "Falha ao preparar " + component.name + ": " + safeMessage(error);
                     if (!component.required) {
                         callback.status(message + ". É opcional; continuando sem ele.");
                         next++;
@@ -180,8 +178,39 @@ public final class FdroidInstaller {
         });
     }
 
-    private File download(Component component) throws Exception {
-        HttpURLConnection metadata = connection(API + component.packageName);
+    private File copyEmbedded(Component component) throws Exception {
+        File directory = new File(context.getCacheDir(), "fdroid");
+        if (!directory.exists() && !directory.mkdirs()) throw new IOException("não foi possível criar o cache");
+        File output = new File(directory, component.packageName + "_embedded.apk");
+        try (InputStream input = context.getAssets().open(component.assetName);
+             OutputStream out = new FileOutputStream(output)) {
+            byte[] buffer = new byte[32 * 1024];
+            int count;
+            long total = 0;
+            while ((count = input.read(buffer)) != -1) {
+                out.write(buffer, 0, count);
+                total += count;
+            }
+            if (total < 1024) throw new IOException("APK vazio ou incompleto");
+        }
+
+        PackageInfo archive = context.getPackageManager().getPackageArchiveInfo(output.getAbsolutePath(), 0);
+        if (archive == null || !component.packageName.equals(archive.packageName)) {
+            throw new IOException("o APK baixado não corresponde a " + component.packageName);
+        }
+        return output;
+    }
+
+    private File prepare(Component component) throws Exception {
+        try {
+            return copyEmbedded(component);
+        } catch (IOException embeddedUnavailable) {
+            return downloadFromFdroid(component);
+        }
+    }
+
+    private File downloadFromFdroid(Component component) throws Exception {
+        HttpURLConnection metadata = connection("https://f-droid.org/api/v1/packages/" + component.packageName);
         JSONObject json;
         try (InputStream input = metadata.getInputStream()) {
             json = new JSONObject(readAll(input));
@@ -191,44 +220,43 @@ public final class FdroidInstaller {
         int versionCode = json.optInt("suggestedVersionCode", -1);
         if (versionCode < 0) {
             JSONArray packages = json.optJSONArray("packages");
-            List<Integer> stable = new ArrayList<>();
-            if (packages != null) {
-                for (int i = 0; i < packages.length(); i++) {
-                    JSONObject version = packages.optJSONObject(i);
-                    String name = version == null ? "" : version.optString("versionName", "");
-                    if (version != null && !name.toLowerCase().contains("beta")
-                            && !name.toLowerCase().contains("alpha")
-                            && !name.toLowerCase().contains("rc")) {
-                        stable.add(version.optInt("versionCode", -1));
-                    }
-                }
+            if (packages != null && packages.length() > 0) {
+                versionCode = packages.optJSONObject(0).optInt("versionCode", -1);
             }
-            if (!stable.isEmpty()) versionCode = Collections.max(stable);
         }
-        if (versionCode < 0) throw new IOException("versão estável não encontrada");
-
+        if (versionCode < 0) throw new IOException("versão do F-Droid não encontrada");
         File directory = new File(context.getCacheDir(), "fdroid");
         if (!directory.exists() && !directory.mkdirs()) throw new IOException("não foi possível criar o cache");
         File output = new File(directory, component.packageName + "_" + versionCode + ".apk");
-        HttpURLConnection apk = connection(APK_BASE + component.packageName + "_" + versionCode + ".apk");
+        HttpURLConnection apk = connection("https://f-droid.org/repo/" + component.packageName + "_" + versionCode + ".apk");
         try (InputStream input = apk.getInputStream(); OutputStream out = new FileOutputStream(output)) {
             byte[] buffer = new byte[32 * 1024];
             int count;
-            long total = 0;
-            while ((count = input.read(buffer)) != -1) {
-                out.write(buffer, 0, count);
-                total += count;
-            }
-            if (total < 1024) throw new IOException("APK vazio ou incompleto");
+            while ((count = input.read(buffer)) != -1) out.write(buffer, 0, count);
         } finally {
             apk.disconnect();
         }
-
-        PackageInfo archive = context.getPackageManager().getPackageArchiveInfo(output.getAbsolutePath(), 0);
-        if (archive == null || !component.packageName.equals(archive.packageName)) {
-            throw new IOException("o APK baixado não corresponde a " + component.packageName);
-        }
         return output;
+    }
+
+    private static HttpURLConnection connection(String address) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
+        connection.setConnectTimeout(15000);
+        connection.setReadTimeout(120000);
+        connection.setInstanceFollowRedirects(true);
+        connection.setRequestProperty("User-Agent", "CodexWeb-Installer/1.0");
+        if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
+            throw new IOException("HTTP " + connection.getResponseCode());
+        }
+        return connection;
+    }
+
+    private static String readAll(InputStream input) throws Exception {
+        StringBuilder result = new StringBuilder();
+        byte[] buffer = new byte[16 * 1024];
+        int count;
+        while ((count = input.read(buffer)) != -1) result.append(new String(buffer, 0, count, "UTF-8"));
+        return result.toString();
     }
 
     private void stageInstall(Component component, File apk) {
@@ -266,26 +294,6 @@ public final class FdroidInstaller {
                 callback.finished(false);
             }
         }
-    }
-
-    private static HttpURLConnection connection(String address) throws Exception {
-        HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
-        connection.setConnectTimeout(15000);
-        connection.setReadTimeout(120000);
-        connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent", "CodexWeb-Installer/1.0");
-        if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
-            throw new IOException("HTTP " + connection.getResponseCode());
-        }
-        return connection;
-    }
-
-    private static String readAll(InputStream input) throws Exception {
-        StringBuilder result = new StringBuilder();
-        byte[] buffer = new byte[16 * 1024];
-        int count;
-        while ((count = input.read(buffer)) != -1) result.append(new String(buffer, 0, count, "UTF-8"));
-        return result.toString();
     }
 
     private static String safeMessage(Exception error) {

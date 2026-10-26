@@ -17,6 +17,7 @@ fi
 
 out="$root/build"
 classes="$out/classes"
+assets="$root/src/main/assets"
 mkdir -p "$classes" "$out/gen" "$out/obj" "$out/dex" "$out/dex-unpacked"
 
 native_runner=()
@@ -25,13 +26,11 @@ if [[ "$(uname -m)" == "aarch64" ]] && file "$build_tools/aapt2" | grep -q 'x86-
 fi
 
 "${native_runner[@]}" "$build_tools/aapt2" compile --dir "$root/src/main/res" -o "$out/res.zip"
-"${native_runner[@]}" "$build_tools/aapt2" link \
-  --auto-add-overlay \
-  -I "$platform/android.jar" \
-  --manifest "$root/src/main/AndroidManifest.xml" \
-  -R "$out/res.zip" \
-  --java "$out/gen" \
-  -o "$out/unsigned.apk"
+link_args=(--auto-add-overlay -I "$platform/android.jar" \
+  --manifest "$root/src/main/AndroidManifest.xml" -R "$out/res.zip" \
+  --java "$out/gen" -o "$out/unsigned.apk")
+if [[ -d "$assets" ]]; then link_args=(-A "$assets" "${link_args[@]}"); fi
+"${native_runner[@]}" "$build_tools/aapt2" link "${link_args[@]}"
 
 javac -source 8 -target 8 -encoding UTF-8 \
   -classpath "$platform/android.jar" \
