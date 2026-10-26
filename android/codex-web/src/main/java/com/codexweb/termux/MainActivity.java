@@ -49,6 +49,8 @@ public final class MainActivity extends Activity {
     private static final String TERMUX_SERVICE = "com.termux.app.RunCommandService";
     private static final String OPENCODE_REPOSITORY_URL =
             "https://github.com/jhonathamlegal-sudo/codex-web-opencode.git";
+    private static final String BOOTSTRAP_SCRIPT_URL =
+            "https://raw.githubusercontent.com/jhonathamlegal-sudo/codex-web-opencode/main/android/codex-web/termux-start.sh";
     private static final String SERVER_URL = "http://127.0.0.1:4096";
     private static final String SERVER_INFO_URL = SERVER_URL + "/api/info";
     private static final int MAX_PROBES = 60;
@@ -380,7 +382,13 @@ public final class MainActivity extends Activity {
     private void sendRunCommand() {
         String command = "export OPENCODE_REPOSITORY_URL='" + shellQuote(OPENCODE_REPOSITORY_URL)
                 + "'; export OPENCODE_SERVER_PASSWORD='" + shellQuote(serverPassword)
-                + "'; exec bash \"$HOME/opencode/android/codex-web/termux-start.sh\"";
+                + "'; script=\"$HOME/opencode/android/codex-web/termux-start.sh\"; "
+                + "if [ ! -f \"$script\" ]; then "
+                + "mkdir -p \"$HOME/.cache/codex-web\"; "
+                + "pkg install -y curl git >> \"$HOME/.cache/codex-web/server.log\" 2>&1 || exit 1; "
+                + "curl -fsSL '" + shellQuote(BOOTSTRAP_SCRIPT_URL) + "' -o \"$HOME/.cache/codex-web/termux-start.sh\" || exit 1; "
+                + "script=\"$HOME/.cache/codex-web/termux-start.sh\"; fi; "
+                + "exec bash \"$script\"";
         Intent intent = new Intent("com.termux.RUN_COMMAND");
         intent.setClassName(TERMUX_PACKAGE, TERMUX_SERVICE);
         intent.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash");
