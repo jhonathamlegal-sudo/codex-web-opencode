@@ -47,6 +47,8 @@ import java.util.concurrent.Executors;
 public final class MainActivity extends Activity {
     private static final String TERMUX_PACKAGE = "com.termux";
     private static final String TERMUX_SERVICE = "com.termux.app.RunCommandService";
+    private static final String OPENCODE_REPOSITORY_URL =
+            "https://github.com/jhonathamlegal-sudo/codex-web-opencode.git";
     private static final String SERVER_URL = "http://127.0.0.1:4096";
     private static final String SERVER_INFO_URL = SERVER_URL + "/api/info";
     private static final int MAX_PROBES = 60;
@@ -376,7 +378,8 @@ public final class MainActivity extends Activity {
     }
 
     private void sendRunCommand() {
-        String command = "export OPENCODE_SERVER_PASSWORD='" + shellQuote(serverPassword)
+        String command = "export OPENCODE_REPOSITORY_URL='" + shellQuote(OPENCODE_REPOSITORY_URL)
+                + "'; export OPENCODE_SERVER_PASSWORD='" + shellQuote(serverPassword)
                 + "'; exec bash \"$HOME/opencode/android/codex-web/termux-start.sh\"";
         Intent intent = new Intent("com.termux.RUN_COMMAND");
         intent.setClassName(TERMUX_PACKAGE, TERMUX_SERVICE);
