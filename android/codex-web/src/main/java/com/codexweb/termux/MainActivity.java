@@ -119,6 +119,7 @@ public final class MainActivity extends Activity {
     private boolean repairRequested;
     private boolean connectionRequested;
     private boolean batteryPromptShown;
+    private boolean installFlowStarted;
     private boolean waitingForBatteryReturn;
 
     @Override
@@ -159,8 +160,10 @@ public final class MainActivity extends Activity {
         buildUi();
         if (!fdroidInstaller.resume(this, installerCallback())) {
             refreshInstallerState();
-            if (FdroidInstaller.requiredMissing(this).isEmpty()) {
+            if (FdroidInstaller.missing(this).isEmpty()) {
                 mainHandler.postDelayed(this::startTermuxAndServer, 250);
+            } else {
+                mainHandler.postDelayed(this::autoInstallIfNeeded, 350);
             }
         }
     }
@@ -420,7 +423,7 @@ public final class MainActivity extends Activity {
         String summary = FdroidInstaller.summary(this);
         componentsStatus.setText(summary + "\n" + FdroidInstaller.details(this));
         refreshBatteryState();
-        if (!FdroidInstaller.requiredMissing(this).isEmpty()) {
+        if (!FdroidInstaller.missing(this).isEmpty()) {
             setState("PREPARAÇÃO", AMBER, "Ambiente incompleto", "Instale os componentes oficiais para liberar a conexão automática.", false);
             primaryAction.setText("Instalar e configurar");
             primaryAction.setEnabled(true);
@@ -521,7 +524,14 @@ public final class MainActivity extends Activity {
         primaryAction.setEnabled(false);
         installComponentsAction.setEnabled(false);
         setState("INSTALANDO", AMBER, "Preparando componentes…", "O Android exibirá uma confirmação para cada APK.", true);
+        installFlowStarted = true;
         fdroidInstaller.start(this, installerCallback());
+    }
+
+    private void autoInstallIfNeeded() {
+        if (fdroidInstaller == null || fdroidInstaller.isRunning() || installFlowStarted) return;
+        if (FdroidInstaller.missing(this).isEmpty()) return;
+        installComponents();
     }
 
     private FdroidInstaller.Callback installerCallback() {
@@ -533,6 +543,7 @@ public final class MainActivity extends Activity {
 
             @Override
             public void permissionRequired() {
+                installFlowStarted = false;
                 installComponentsAction.setEnabled(true);
                 setState("PERMISSÃO", AMBER, "Permita instalações pelo Codex Web", "O Android precisa autorizar a instalação dos componentes oficiais.", false);
                 showInstallPermissionDialog();
@@ -540,6 +551,7 @@ public final class MainActivity extends Activity {
 
             @Override
             public void finished(boolean success) {
+                installFlowStarted = false;
                 refreshInstallerState();
                 if (!success) {
                     installComponentsAction.setEnabled(true);
@@ -553,7 +565,7 @@ public final class MainActivity extends Activity {
     }
 
     private void startTermuxAndServer() {
-        if (!FdroidInstaller.requiredMissing(this).isEmpty()) {
+        if (!FdroidInstaller.missing(this).isEmpty()) {
             refreshInstallerState();
             return;
         }
@@ -1015,7 +1027,12 @@ public final class MainActivity extends Activity {
             return;
         }
         if (componentsStatus != null && fdroidInstaller != null && !fdroidInstaller.isRunning()
-                && webView.getVisibility() != View.VISIBLE && !connectionRequested) refreshInstallerState();
+                && webView.getVisibility() != View.VISIBLE && !connectionRequested) {
+            refreshInstallerState();
+            if (!installFlowStarted && !FdroidInstaller.missing(this).isEmpty()) {
+                mainHandler.postDelayed(this::autoInstallIfNeeded, 250);
+            }
+        }
     }
 
     @Override
