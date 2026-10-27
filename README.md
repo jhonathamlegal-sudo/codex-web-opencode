@@ -20,7 +20,7 @@ Interface web local, persistência de instruções e launcher Android para prepa
 
 ## Download versão 1.0.0 BETA
 
-**[Click aqui para baixar Codex-Android](https://www.mediafire.com/file/5y5x97luycdco9n/CodexWeb-1.0.1-beta.apk/file)**
+**[Click aqui para baixar Codex-Android](https://www.mediafire.com/file/4i3z0wb2gfr7dig/CodexWeb-1.0.2-BETA.apk/file)**
 
 > [!TIP]
 > Esta é uma versão BETA do projeto 
@@ -54,7 +54,7 @@ flowchart LR
 ## Instalação
 
 ### Android
-0. [Baixei o APK](https://www.mediafire.com/file/5y5x97luycdco9n/CodexWeb-1.0.1-beta.apk/file)
+0. [Baixei o APK](https://www.mediafire.com/file/4i3z0wb2gfr7dig/CodexWeb-1.0.2-BETA.apk/file)
 1. Instale o APK e permita instalações solicitadas pelo Android.
 2. Aceite cada confirmação para Termux, Termux:API, Termux:Boot e Termux:Widget.
 3. Abra o Termux quando o launcher solicitar a primeira inicialização.
