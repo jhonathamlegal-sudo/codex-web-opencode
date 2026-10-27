@@ -609,7 +609,9 @@ public final class MainActivity extends Activity {
         intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{"-lc", command});
         intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
         intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
+        intent.putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "0");
         startService(intent);
+        returnToLauncher();
     }
 
     private void sendRunCommandForRepair() {
@@ -790,6 +792,27 @@ public final class MainActivity extends Activity {
         progress.setVisibility(View.GONE);
     }
 
+    private void openTermuxPermissions() {
+        try {
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + TERMUX_PACKAGE)));
+        } catch (ActivityNotFoundException ignored) {
+            openTermux();
+        }
+    }
+
+    private void returnToLauncher() {
+        mainHandler.postDelayed(() -> {
+            try {
+                Intent self = new Intent(this, MainActivity.class);
+                self.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                startActivity(self);
+            } catch (RuntimeException ignored) {
+                // The launcher may already be in front.
+            }
+        }, 500);
+    }
+
     private void showExternalAppsInstructions() {
         setState("AÇÃO NECESSÁRIA", AMBER, "Permissão externa bloqueada", "O Termux bloqueou comandos vindos de outros aplicativos.", false);
         setupHint.setText("Ative allow-external-apps no Termux. O botão abaixo copia a configuração sem expor sua API key.");
@@ -802,8 +825,8 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("Permitir comandos do Codex Web")
                 .setMessage("O Android não mostra uma caixa de permissão comum para esta integração. O Termux precisa ser configurado uma vez para aceitar comandos externos.")
-                .setPositiveButton("Abrir Termux", (dialog, which) -> openTermux())
-                .setNeutralButton("Copiar configuração", (dialog, which) -> copySetupCommand())
+                .setPositiveButton("Permissões do Termux", (dialog, which) -> openTermuxPermissions())
+                .setNeutralButton("Abrir Termux", (dialog, which) -> openTermux())
                 .setNegativeButton("Depois", null)
                 .show();
     }
@@ -828,7 +851,8 @@ public final class MainActivity extends Activity {
             intent.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash");
             intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{"-lc", command});
             intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
-            intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", false);
+            intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
+            intent.putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "0");
             intent.putExtra("com.termux.RUN_COMMAND_RESULT_PENDING_INTENT", pending);
             startService(intent);
         } catch (SecurityException ignored) {
