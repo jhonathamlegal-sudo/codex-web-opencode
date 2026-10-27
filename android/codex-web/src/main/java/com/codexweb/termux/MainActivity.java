@@ -58,7 +58,7 @@ public final class MainActivity extends Activity {
     private static final String OPENCODE_REPOSITORY_URL =
             "https://github.com/jhonathamlegal-sudo/codex-web-opencode.git";
     private static final String OPENCODE_REPOSITORY_COMMIT =
-            "6b9cad5f07463fd36eba7a10c157df02b7aa76ea";
+            "ab25de89be501a62945d017d57b57eae8a0470a1";
     private static final String BOOTSTRAP_ASSET = "codex-web-termux-start.sh";
     private static final String WATCHDOG_ASSET = "codex-web-termux-watchdog.sh";
     private static final String SERVER_URL = "http://127.0.0.1:4096";
