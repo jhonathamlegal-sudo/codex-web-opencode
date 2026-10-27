@@ -1,6 +1,8 @@
 package com.codexweb.termux;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
@@ -16,6 +18,8 @@ import android.os.Bundle;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
@@ -53,6 +57,9 @@ public final class MainActivity extends Activity {
             "https://raw.githubusercontent.com/jhonathamlegal-sudo/codex-web-opencode/main/android/codex-web/termux-start.sh";
     private static final String SERVER_URL = "http://127.0.0.1:4096";
     private static final String SERVER_INFO_URL = SERVER_URL + "/api/info";
+    private static final String SERVER_SESSION_URL = SERVER_URL + "/api/session?limit=1";
+    private static final String STATUS_ACTION = "com.codexweb.termux.STATUS_RESULT";
+    private static final String LOG_ACTION = "com.codexweb.termux.LOG_RESULT";
     private static final int MAX_PROBES = 60;
     private static final String PREFS = "codex_web";
     private static final String PASSWORD_KEY = "server_password";
@@ -85,9 +92,15 @@ public final class MainActivity extends Activity {
     private Button openTermuxAction;
     private Button copyAction;
     private Button installComponentsAction;
+    private Button batteryAction;
+    private Button chatAction;
+    private Button viewLogAction;
+    private Button copyLogAction;
     private TextView componentsStatus;
     private FdroidInstaller fdroidInstaller;
     private BroadcastReceiver installReceiver;
+    private BroadcastReceiver commandOutputReceiver;
+    private int commandRequestCode;
     private int probeCount;
     private String serverPassword;
 
@@ -112,6 +125,20 @@ public final class MainActivity extends Activity {
         IntentFilter filter = new IntentFilter(FdroidInstaller.INSTALL_ACTION);
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(installReceiver, filter, RECEIVER_NOT_EXPORTED);
         else registerReceiver(installReceiver, filter);
+        commandOutputReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                String output = intent.getStringExtra("com.termux.RUN_COMMAND_RESULT_STDOUT");
+                if (output == null) output = "";
+                if (STATUS_ACTION.equals(intent.getAction())) applyBootstrapStatus(output);
+                if (LOG_ACTION.equals(intent.getAction())) showLog(output, intent.getBooleanExtra("copy_log", false));
+            }
+        };
+        IntentFilter outputFilter = new IntentFilter();
+        outputFilter.addAction(STATUS_ACTION);
+        outputFilter.addAction(LOG_ACTION);
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(commandOutputReceiver, outputFilter, RECEIVER_NOT_EXPORTED);
+        else registerReceiver(commandOutputReceiver, outputFilter);
         buildUi();
         refreshInstallerState();
     }
@@ -194,11 +221,21 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams installButtonParams = new LinearLayout.LayoutParams(-1, dp(48));
         installButtonParams.topMargin = dp(14);
         installerCard.addView(installComponentsAction, installButtonParams);
+        batteryAction = actionButton("Desativar otimização de bateria do Termux", false);
+        batteryAction.setOnClickListener(v -> configureBatteryOptimization());
+        LinearLayout.LayoutParams batteryParams = new LinearLayout.LayoutParams(-1, dp(48));
+        batteryParams.topMargin = dp(10);
+        installerCard.addView(batteryAction, batteryParams);
         content.addView(installerCard, marginTop(dp(14)));
 
         primaryAction = actionButton("Iniciar conexão", true);
         primaryAction.setOnClickListener(v -> startTermuxAndServer());
         content.addView(primaryAction, marginTop(dp(16)));
+
+        chatAction = actionButton("Abrir chat (aguardando servidor)", false);
+        chatAction.setEnabled(false);
+        chatAction.setOnClickListener(v -> showWebView());
+        content.addView(chatAction, marginTop(dp(10)));
 
         LinearLayout secondaryRow = new LinearLayout(this);
         secondaryRow.setGravity(Gravity.CENTER);
@@ -211,6 +248,18 @@ public final class MainActivity extends Activity {
         copyParams.leftMargin = dp(10);
         secondaryRow.addView(copyAction, copyParams);
         content.addView(secondaryRow, marginTop(dp(10)));
+
+        LinearLayout logRow = new LinearLayout(this);
+        logRow.setGravity(Gravity.CENTER);
+        viewLogAction = actionButton("Ver log", false);
+        viewLogAction.setOnClickListener(v -> requestLog(false));
+        copyLogAction = actionButton("Copiar log", false);
+        copyLogAction.setOnClickListener(v -> requestLog(true));
+        logRow.addView(viewLogAction, new LinearLayout.LayoutParams(0, dp(44), 1));
+        LinearLayout.LayoutParams copyLogParams = new LinearLayout.LayoutParams(0, dp(44), 1);
+        copyLogParams.leftMargin = dp(10);
+        logRow.addView(copyLogAction, copyLogParams);
+        content.addView(logRow, marginTop(dp(8)));
 
         LinearLayout setupCard = card();
         setupCard.addView(text("Configuração única", 17, TEXT, true));
@@ -294,6 +343,7 @@ public final class MainActivity extends Activity {
     private void refreshInstallerState() {
         String summary = FdroidInstaller.summary(this);
         componentsStatus.setText(summary);
+        refreshBatteryState();
         if (!FdroidInstaller.requiredMissing(this).isEmpty()) {
             setState("PREPARAÇÃO", AMBER, "Ambiente incompleto", "Instale os componentes oficiais para liberar a conexão automática.", false);
             primaryAction.setText("Instalar componentes");
@@ -305,7 +355,40 @@ public final class MainActivity extends Activity {
         }
         installComponentsAction.setText("Componentes prontos");
         installComponentsAction.setEnabled(false);
+        primaryAction.setText("Iniciar conexão");
+        primaryAction.setEnabled(true);
+        primaryAction.setOnClickListener(v -> startTermuxAndServer());
         if (isTermuxInstalled()) startTermuxAndServer();
+    }
+
+    private void refreshBatteryState() {
+        if (batteryAction == null) return;
+        boolean ignored = false;
+        if (Build.VERSION.SDK_INT >= 23) {
+            try {
+                PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
+                ignored = power != null && power.isIgnoringBatteryOptimizations(TERMUX_PACKAGE);
+            } catch (RuntimeException ignoredError) {
+                // Some Android builds hide this status; keep the manual action visible.
+            }
+        }
+        batteryAction.setText(ignored ? "Bateria do Termux configurada" : "Desativar otimização de bateria do Termux");
+        batteryAction.setEnabled(!ignored);
+    }
+
+    private void configureBatteryOptimization() {
+        if (Build.VERSION.SDK_INT < 23) return;
+        try {
+            Intent request = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + TERMUX_PACKAGE));
+            startActivity(request);
+        } catch (ActivityNotFoundException | SecurityException error) {
+            try {
+                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (ActivityNotFoundException ignored) {
+                Toast.makeText(this, "Abra as configurações de bateria e permita o Termux em 'Sem restrições'.", Toast.LENGTH_LONG).show();
+            }
+        }
     }
 
     private void installComponents() {
@@ -370,8 +453,9 @@ public final class MainActivity extends Activity {
         primaryAction.setEnabled(false);
         mainHandler.postDelayed(() -> {
             try {
-                sendRunCommand();
+                sendRunCommand(false);
                 probeCount = 0;
+                requestStatus();
                 probeServer();
             } catch (SecurityException error) {
                 showExternalAppsInstructions();
@@ -379,9 +463,10 @@ public final class MainActivity extends Activity {
         }, 850);
     }
 
-    private void sendRunCommand() {
+    private void sendRunCommand(boolean repair) {
         String command = "export OPENCODE_REPOSITORY_URL='" + shellQuote(OPENCODE_REPOSITORY_URL)
                 + "'; export OPENCODE_SERVER_PASSWORD='" + shellQuote(serverPassword)
+                + "'; export OPENCODE_REPAIR='" + (repair ? "1" : "0")
                 + "'; script=\"$HOME/opencode/android/codex-web/termux-start.sh\"; "
                 + "if [ ! -f \"$script\" ]; then "
                 + "mkdir -p \"$HOME/.cache/codex-web\"; "
@@ -398,23 +483,30 @@ public final class MainActivity extends Activity {
         startService(intent);
     }
 
+    private void sendRunCommandForRepair() {
+        try {
+            sendRunCommand(true);
+            probeCount = 0;
+            requestStatus();
+            probeServer();
+        } catch (SecurityException error) {
+            showExternalAppsInstructions();
+        }
+    }
+
     private void probeServer() {
         executor.execute(() -> {
             boolean ready = false;
             try {
-                HttpURLConnection connection = (HttpURLConnection) new URL(SERVER_INFO_URL).openConnection();
-                connection.setConnectTimeout(700);
-                connection.setReadTimeout(1200);
                 String credentials = "opencode:" + serverPassword;
                 String encoded = Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
-                connection.setRequestProperty("Authorization", "Basic " + encoded);
-                ready = connection.getResponseCode() == HttpURLConnection.HTTP_OK;
-                connection.disconnect();
+                ready = probeEndpoint(SERVER_INFO_URL, encoded) && probeEndpoint(SERVER_SESSION_URL, encoded);
             } catch (IOException ignored) {
                 // The server may still be booting.
             }
             boolean finalReady = ready;
             mainHandler.post(() -> {
+                requestStatus();
                 if (finalReady) showWebView();
                 else if (++probeCount < MAX_PROBES) {
                     connectionDetail.setText("Servidor local iniciando… " + probeCount + "/" + MAX_PROBES);
@@ -424,7 +516,19 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private boolean probeEndpoint(String endpoint, String encodedCredentials) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) new URL(endpoint).openConnection();
+        connection.setConnectTimeout(700);
+        connection.setReadTimeout(1200);
+        connection.setRequestProperty("Authorization", "Basic " + encodedCredentials);
+        boolean ready = connection.getResponseCode() == HttpURLConnection.HTTP_OK;
+        connection.disconnect();
+        return ready;
+    }
+
     private void showWebView() {
+        chatAction.setText("Abrir chat");
+        chatAction.setEnabled(true);
         setupView.setVisibility(View.GONE);
         webView.setVisibility(View.VISIBLE);
         String credentials = "opencode:" + serverPassword;
@@ -443,6 +547,57 @@ public final class MainActivity extends Activity {
         progress.setVisibility(View.GONE);
     }
 
+    private void requestStatus() {
+        if (!isTermuxInstalled()) return;
+        sendOutputCommand("cat \"$HOME/.cache/codex-web/status\" 2>/dev/null || true", STATUS_ACTION, false);
+    }
+
+    private void applyBootstrapStatus(String output) {
+        String line = output == null ? "" : output.trim();
+        if (line.isEmpty() || webView.getVisibility() == View.VISIBLE) return;
+        String[] parts = line.split("\\|", 3);
+        if (parts.length < 2) return;
+        String phase = parts[0];
+        String message = parts[1];
+        String elapsed = parts.length > 2 ? parts[2] : "?";
+        if ("cloning".equals(phase)) setState("CLONANDO", AMBER, "Clonando o OpenCode…", message, true);
+        else if ("installing_dependencies".equals(phase) || "installing".equals(phase)) setState("INSTALANDO", AMBER, "Instalando componentes…", message, true);
+        else if ("compiling".equals(phase)) setState("COMPILANDO", BLUE, "Compilando a interface…", message, true);
+        else if ("starting".equals(phase) || "checking".equals(phase)) setState("PREPARAÇÃO", AMBER, "Preparando servidor…", message, true);
+        else if ("online".equals(phase)) setState("ONLINE", GREEN, "Servidor online", message + " Tempo: " + elapsed + "s", false);
+        else if ("zombie_restart".equals(phase)) setState("RECUPERANDO", AMBER, "Servidor zumbi detectado", message, true);
+        else if ("repair_required".equals(phase)) showRepairRequired();
+        else if ("key_missing".equals(phase)) showKeyMissing();
+        else if (phase.endsWith("_error") || "config_missing".equals(phase)) showBootstrapError(message);
+    }
+
+    private void showRepairRequired() {
+        setState("REPARO", AMBER, "Ambiente incompleto", "~/opencode existe, mas não parece um checkout funcional. O reparo cria um backup e não apaga seu código.", false);
+        primaryAction.setText("Reparar com backup seguro");
+        primaryAction.setEnabled(true);
+        primaryAction.setOnClickListener(v -> sendRunCommandForRepair());
+        setupHint.setText("O diretório atual será renomeado para ~/opencode-user-backup-AAAAmmdd-HHmmss antes de um novo clone.");
+        progress.setVisibility(View.GONE);
+    }
+
+    private void showKeyMissing() {
+        setState("CONFIGURAÇÃO", AMBER, "Chave APINEX ausente", "Configure a chave no Termux para liberar os modelos gratuitos.", false);
+        setupHint.setText("No Termux, crie ~/.config/opencode/apinex.env com APINEX_API_KEY= sua-chave e toque em Tentar novamente.");
+        codeBlock.setText("mkdir -p ~/.config/opencode && printf '%s\\n' 'APINEX_API_KEY=sua-chave-aqui' > ~/.config/opencode/apinex.env && chmod 600 ~/.config/opencode/apinex.env");
+        primaryAction.setText("Tentar novamente");
+        primaryAction.setEnabled(true);
+        primaryAction.setOnClickListener(v -> startTermuxAndServer());
+        progress.setVisibility(View.GONE);
+    }
+
+    private void showBootstrapError(String message) {
+        setState("ERRO", RED, "Erro no bootstrap", message + " Veja o log para detalhes.", false);
+        primaryAction.setText("Tentar novamente");
+        primaryAction.setEnabled(true);
+        primaryAction.setOnClickListener(v -> startTermuxAndServer());
+        progress.setVisibility(View.GONE);
+    }
+
     private void showExternalAppsInstructions() {
         setState("AÇÃO NECESSÁRIA", AMBER, "Permissão externa bloqueada", "O Termux está instalado, mas ainda não aceita comandos enviados por outros aplicativos.", false);
         setupHint.setText("No Termux, execute o comando abaixo. Depois feche e abra o Termux novamente e toque em Verificar conexão.");
@@ -454,6 +609,50 @@ public final class MainActivity extends Activity {
         progress.setVisibility(View.GONE);
     }
 
+    private void requestLog(boolean copy) {
+        sendOutputCommand("tail -n 200 \"$HOME/.cache/codex-web/server.log\" 2>/dev/null || echo 'Log ainda não existe.'", LOG_ACTION, copy);
+    }
+
+    private void sendOutputCommand(String command, String action, boolean copyLog) {
+        if (!isTermuxInstalled()) {
+            Toast.makeText(this, "Termux ainda não está instalado.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            Intent result = new Intent(action).setPackage(getPackageName());
+            result.putExtra("copy_log", copyLog);
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
+            PendingIntent pending = PendingIntent.getBroadcast(this, ++commandRequestCode, result, flags);
+            Intent intent = new Intent("com.termux.RUN_COMMAND");
+            intent.setClassName(TERMUX_PACKAGE, TERMUX_SERVICE);
+            intent.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash");
+            intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{"-lc", command});
+            intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
+            intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", false);
+            intent.putExtra("com.termux.RUN_COMMAND_RESULT_PENDING_INTENT", pending);
+            startService(intent);
+        } catch (SecurityException ignored) {
+            // The main connection path will show the complete external-app permission guidance.
+        }
+    }
+
+    private void showLog(String output, boolean copy) {
+        if (copy) {
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            clipboard.setPrimaryClip(ClipData.newPlainText("Codex Web server.log", output));
+            Toast.makeText(this, "Log copiado.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        TextView logText = text(output, 11, Color.rgb(220, 226, 234), false);
+        logText.setTypeface(Typeface.MONOSPACE);
+        logText.setTextIsSelectable(true);
+        logText.setPadding(dp(14), dp(10), dp(14), dp(10));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(logText);
+        new AlertDialog.Builder(this).setTitle("Log do servidor").setView(scroll).setPositiveButton("Fechar", null).show();
+    }
+
     private void showServerFailure() {
         setState("SERVIDOR OFFLINE", RED, "Não foi possível conectar ao servidor", "Verifique o log ~/.cache/codex-web/server.log no Termux e confirme se ~/opencode está completo.", false);
         setupHint.setText("Se esta é a primeira execução, habilite a permissão externa abaixo, reinicie o Termux e tente novamente.");
@@ -462,6 +661,8 @@ public final class MainActivity extends Activity {
         primaryAction.setOnClickListener(v -> startTermuxAndServer());
         openTermuxAction.setVisibility(View.VISIBLE);
         copyAction.setVisibility(View.VISIBLE);
+        viewLogAction.setEnabled(true);
+        copyLogAction.setEnabled(true);
         progress.setVisibility(View.GONE);
     }
 
@@ -584,6 +785,7 @@ public final class MainActivity extends Activity {
         mainHandler.removeCallbacksAndMessages(null);
         executor.shutdownNow();
         if (installReceiver != null) unregisterReceiver(installReceiver);
+        if (commandOutputReceiver != null) unregisterReceiver(commandOutputReceiver);
         if (fdroidInstaller != null) fdroidInstaller.close();
         if (webView != null) webView.destroy();
         super.onDestroy();

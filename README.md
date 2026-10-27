@@ -34,6 +34,9 @@ Interface web local, persistência de instruções e launcher Android para prepa
 | **Perfis de modelo** | Cada modelo pode ter seu próprio `AGENT.md` em `~/.config/opencode/models/<provedor>/<modelo>/`. |
 | **Launcher Android** | Detecta Termux e inicia o servidor por botões, sem exigir comandos complexos. |
 | **Bootstrap** | Clona o repositório, instala dependências e prepara o cliente web no Termux. |
+| **Sobrevivência** | Ativa wake lock, monitora `/api/info` + `/api/session` e reinicia servidor zumbi. |
+| **Feedback** | Mostra instalando, clonando, compilando, online e erro; inclui Ver log e Copiar log. |
+| **Reparo seguro** | Detecta `~/opencode` incompleto e cria backup antes de reparar; a chave APINEX é orientada no launcher. |
 
 ## Fluxo do aplicativo
 
@@ -93,6 +96,7 @@ bun packages/cli/src/codex-web-server.ts
 ```
 
 O launcher usa `127.0.0.1:4096`; ele não publica o servidor na internet.
+O bootstrap grava a fase e o tempo em `~/.cache/codex-web/status`. O watchdog ativa `termux-wake-lock`, registra crashes/SIGKILL suspeitos e só libera **Abrir chat** após duas verificações autenticadas. A configuração de bateria do Termux é oferecida pelo launcher e ainda depende da confirmação do Android.
 
 ## Desenvolvimento
 
@@ -120,6 +124,7 @@ O resultado aparece em `android/codex-web/build/CodexWeb-debug.apk`. Se `src/mai
 android/codex-web/                         launcher e instalador Android
 android/codex-web/src/main/assets/fdroid/  APKs oficiais opcionais do F-Droid
 android/codex-web/termux-start.sh          bootstrap e servidor no Termux
+android/codex-web/termux-watchdog.sh       watchdog e health checks do servidor
 packages/app/                              interface web
 packages/core/                             núcleo, persistência e modelos
 ```
