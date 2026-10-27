@@ -40,7 +40,9 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -55,10 +57,10 @@ public final class MainActivity extends Activity {
     private static final String TERMUX_SERVICE = "com.termux.app.RunCommandService";
     private static final String OPENCODE_REPOSITORY_URL =
             "https://github.com/jhonathamlegal-sudo/codex-web-opencode.git";
-    private static final String BOOTSTRAP_SCRIPT_URL =
-            "https://raw.githubusercontent.com/jhonathamlegal-sudo/codex-web-opencode/main/android/codex-web/termux-start.sh";
-    private static final String WATCHDOG_SCRIPT_URL =
-            "https://raw.githubusercontent.com/jhonathamlegal-sudo/codex-web-opencode/main/android/codex-web/termux-watchdog.sh";
+    private static final String OPENCODE_REPOSITORY_COMMIT =
+            "b1745e4f030ed4046dd97cf1e81a74bc01c18485";
+    private static final String BOOTSTRAP_ASSET = "codex-web-termux-start.sh";
+    private static final String WATCHDOG_ASSET = "codex-web-termux-watchdog.sh";
     private static final String SERVER_URL = "http://127.0.0.1:4096";
     private static final String SERVER_INFO_URL = SERVER_URL + "/api/info";
     private static final String SERVER_SESSION_URL = SERVER_URL + "/api/session?limit=1";
@@ -121,6 +123,7 @@ public final class MainActivity extends Activity {
     private boolean batteryPromptShown;
     private boolean installFlowStarted;
     private boolean waitingForBatteryReturn;
+    private boolean termuxLaunchStarted;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -382,6 +385,29 @@ public final class MainActivity extends Activity {
         view.setWebChromeClient(new WebChromeClient());
         view.setWebViewClient(new WebViewClient() {
             @Override
+            public boolean shouldOverrideUrlLoading(WebView current, WebResourceRequest request) {
+                Uri uri = request == null ? null : request.getUrl();
+                if (uri == null) return true;
+                String host = uri.getHost();
+                boolean local = ("http".equalsIgnoreCase(uri.getScheme())
+                        && ("127.0.0.1".equals(host) || "localhost".equals(host)));
+                if (local) return false;
+                openUrl(uri.toString());
+                return true;
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView current, String url) {
+                Uri uri = Uri.parse(url);
+                String host = uri.getHost();
+                boolean local = ("http".equalsIgnoreCase(uri.getScheme())
+                        && ("127.0.0.1".equals(host) || "localhost".equals(host)));
+                if (local) return false;
+                openUrl(url);
+                return true;
+            }
+
+            @Override
             public void onReceivedHttpAuthRequest(WebView current, HttpAuthHandler handler, String host, String realm) {
                 if ("127.0.0.1".equals(host) || "localhost".equals(host)) handler.proceed("opencode", serverPassword);
                 else handler.cancel();
@@ -592,8 +618,20 @@ public final class MainActivity extends Activity {
     }
 
     private void launchTermuxThenCommand() {
-        connectionDetail.setText("Serviço do Termux em segundo plano; aguardando resposta…");
-        mainHandler.postDelayed(this::attemptExternalCommand, 350);
+        connectionDetail.setText("Abrindo o Termux uma vez para concluir a inicialização…");
+        if (!termuxLaunchStarted) {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(TERMUX_PACKAGE);
+            if (launch != null) {
+                termuxLaunchStarted = true;
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_HISTORY);
+                try {
+                    startActivity(launch);
+                } catch (RuntimeException ignored) {
+                    // RUN_COMMAND may still work if Termux is already initialized.
+                }
+            }
+        }
+        mainHandler.postDelayed(this::attemptExternalCommand, 1800);
     }
 
     private void attemptExternalCommand() {
@@ -614,17 +652,28 @@ public final class MainActivity extends Activity {
     }
 
     private void sendRunCommand(boolean repair) {
+        final String bootstrap;
+        final String watchdog;
+        try {
+            bootstrap = readAsset(BOOTSTRAP_ASSET);
+            watchdog = readAsset(WATCHDOG_ASSET);
+        } catch (IOException error) {
+            showBootstrapError("Scripts de bootstrap ausentes no APK: " + error.getMessage());
+            return;
+        }
+        String bootstrapEncoded = Base64.getEncoder().encodeToString(bootstrap.getBytes(StandardCharsets.UTF_8));
+        String watchdogEncoded = Base64.getEncoder().encodeToString(watchdog.getBytes(StandardCharsets.UTF_8));
         String command = "mkdir -p \"$HOME/.cache/codex-web\"; "
-                + "pkg install -y curl git >> \"$HOME/.cache/codex-web/server.log\" 2>&1 || exit 1; "
-                + "curl -fsSL '" + shellQuote(BOOTSTRAP_SCRIPT_URL) + "' -o \"$HOME/.cache/codex-web/termux-start.sh.new\" || exit 1; "
-                + "mv \"$HOME/.cache/codex-web/termux-start.sh.new\" \"$HOME/.cache/codex-web/termux-start.sh\" || exit 1; "
-                + "chmod 700 \"$HOME/.cache/codex-web/termux-start.sh\"; "
-                + "export OPENCODE_WATCHDOG_URL='" + shellQuote(WATCHDOG_SCRIPT_URL)
+                + "printf '%s' '" + shellQuote(bootstrapEncoded) + "' | base64 -d > \"$HOME/.cache/codex-web/termux-start.sh.new\" || exit 1; "
+                + "printf '%s' '" + shellQuote(watchdogEncoded) + "' | base64 -d > \"$HOME/.cache/codex-web/termux-watchdog.sh.new\" || exit 1; "
+                + "mv \"$HOME/.cache/codex-web/termux-start.sh.new\" \"$HOME/.cache/codex-web/termux-start.sh\"; "
+                + "mv \"$HOME/.cache/codex-web/termux-watchdog.sh.new\" \"$HOME/.cache/codex-web/termux-watchdog.sh\"; "
+                + "chmod 700 \"$HOME/.cache/codex-web/termux-start.sh\" \"$HOME/.cache/codex-web/termux-watchdog.sh\"; "
+                + "export OPENCODE_REPOSITORY_COMMIT='" + shellQuote(OPENCODE_REPOSITORY_COMMIT)
                 + "'; export OPENCODE_REPOSITORY_URL='" + shellQuote(OPENCODE_REPOSITORY_URL)
                 + "'; export OPENCODE_SERVER_PASSWORD='" + shellQuote(serverPassword)
                 + "'; export OPENCODE_REPAIR='" + (repair ? "1" : "0")
-                + "'; script=\"$HOME/.cache/codex-web/termux-start.sh\"; "
-                + "exec bash \"$script\"";
+                + "'; exec bash \"$HOME/.cache/codex-web/termux-start.sh\"";
         Intent intent = new Intent("com.termux.RUN_COMMAND");
         intent.setClassName(TERMUX_PACKAGE, TERMUX_SERVICE);
         intent.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash");
@@ -632,8 +681,12 @@ public final class MainActivity extends Activity {
         intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
         intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
         intent.putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "0");
-        startService(intent);
-        returnToLauncher();
+        try {
+            startService(intent);
+            returnToLauncher();
+        } catch (RuntimeException error) {
+            showExternalAppsInstructions();
+        }
     }
 
     private void sendRunCommandForRepair() {
@@ -715,7 +768,7 @@ public final class MainActivity extends Activity {
         if ("cloning".equals(phase)) setState("CLONANDO", AMBER, "Clonando o OpenCode…", message, true);
         else if ("installing_dependencies".equals(phase) || "installing".equals(phase)) setState("INSTALANDO", AMBER, "Instalando componentes…", message, true);
         else if ("compiling".equals(phase)) setState("COMPILANDO", BLUE, "Compilando a interface…", message, true);
-        else if ("starting".equals(phase) || "checking".equals(phase)) setState("PREPARAÇÃO", AMBER, "Preparando servidor…", message, true);
+        else if ("starting".equals(phase) || "checking".equals(phase) || "restarting".equals(phase)) setState("PREPARAÇÃO", AMBER, "Preparando servidor…", message, true);
         else if ("online".equals(phase)) setState("ONLINE", GREEN, "Servidor online", message + " Tempo: " + elapsed + "s", false);
         else if ("zombie_restart".equals(phase)) setState("RECUPERANDO", AMBER, "Servidor zumbi detectado", message, true);
         else if ("repair_required".equals(phase) || "repository_conflict".equals(phase)) showRepairRequired();
@@ -1012,6 +1065,15 @@ public final class MainActivity extends Activity {
         StringBuilder result = new StringBuilder(32);
         for (int i = 0; i < 32; i++) result.append(alphabet.charAt(random.nextInt(alphabet.length())));
         return result.toString();
+    }
+
+    private String readAsset(String name) throws IOException {
+        try (InputStream input = getAssets().open(name); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[16 * 1024];
+            int count;
+            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+            return output.toString("UTF-8");
+        }
     }
 
     private static String shellQuote(String value) {

@@ -8,16 +8,19 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
+import android.content.pm.Signature;
 import android.os.Build;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.security.MessageDigest;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
@@ -33,12 +36,18 @@ public final class FdroidInstaller {
     private static final String ACTIVE = "active";
     private static final String WAITING_PACKAGE = "waiting_package";
     private static final String WAITING_SESSION = "waiting_session";
+    private static final String FDROID_CERT_SHA256 =
+            "228fb2cfe90831c1499ec3ccaf61e96e8e1ce70766b9474672ce427334d41c42";
 
     public static final Component[] COMPONENTS = new Component[]{
-            new Component("Termux", "com.termux", true, "fdroid/com.termux_1022.apk"),
-            new Component("Termux:API", "com.termux.api", false, "fdroid/com.termux.api_1002.apk"),
-            new Component("Termux:Boot", "com.termux.boot", false, "fdroid/com.termux.boot_1000.apk"),
-            new Component("Termux:Widget", "com.termux.widget", false, "fdroid/com.termux.widget_1001.apk")
+            new Component("Termux", "com.termux", true, "fdroid/com.termux_1022.apk",
+                    "fdd476982cd74f2f00aac12d3683b1fa260a0b2d146411b94e09d773be3a7b56"),
+            new Component("Termux:API", "com.termux.api", false, "fdroid/com.termux.api_1002.apk",
+                    "4497dbbf81906df52e59ed387a5223d225aa0de3aca817cc557a621e4dadda44"),
+            new Component("Termux:Boot", "com.termux.boot", false, "fdroid/com.termux.boot_1000.apk",
+                    "6f7cf9b94f539d3efd4af3544ff819947b49395275d8cfa7e5f80de14f3d9cf8"),
+            new Component("Termux:Widget", "com.termux.widget", false, "fdroid/com.termux.widget_1001.apk",
+                    "45fb3f56a7248cb8e14b24b478357e340c63d6cfabb87ff5be94b667ad1688d6")
     };
 
     public interface Callback {
@@ -52,12 +61,14 @@ public final class FdroidInstaller {
         public final String packageName;
         public final boolean required;
         public final String assetName;
+        public final String sha256;
 
-        Component(String name, String packageName, boolean required, String assetName) {
+        Component(String name, String packageName, boolean required, String assetName, String sha256) {
             this.name = name;
             this.packageName = packageName;
             this.required = required;
             this.assetName = assetName;
+            this.sha256 = sha256;
         }
     }
 
@@ -95,10 +106,35 @@ public final class FdroidInstaller {
         }
     }
 
+    private static boolean compatible(Context context, Component component) {
+        if (!installed(context, component.packageName)) return false;
+        try {
+            PackageManager manager = context.getPackageManager();
+            int flags = Build.VERSION.SDK_INT >= 28
+                    ? PackageManager.GET_SIGNING_CERTIFICATES
+                    : PackageManager.GET_SIGNATURES;
+            PackageInfo info = manager.getPackageInfo(component.packageName, flags);
+            Signature[] signatures;
+            if (Build.VERSION.SDK_INT >= 28) {
+                if (info.signingInfo == null) return false;
+                signatures = info.signingInfo.getApkContentsSigners();
+            } else {
+                signatures = info.signatures;
+            }
+            if (signatures == null || signatures.length == 0) return false;
+            for (Signature signature : signatures) {
+                if (FDROID_CERT_SHA256.equalsIgnoreCase(signatureSha256(signature))) return true;
+            }
+        } catch (Exception ignored) {
+            // A package with an unknown signer must never be treated as compatible.
+        }
+        return false;
+    }
+
     public static List<Component> missing(Context context) {
         List<Component> result = new ArrayList<>();
         for (Component component : COMPONENTS) {
-            if (!installed(context, component.packageName)) result.add(component);
+            if (!compatible(context, component)) result.add(component);
         }
         return result;
     }
@@ -106,7 +142,7 @@ public final class FdroidInstaller {
     public static List<Component> requiredMissing(Context context) {
         List<Component> result = new ArrayList<>();
         for (Component component : COMPONENTS) {
-            if (component.required && !installed(context, component.packageName)) result.add(component);
+            if (component.required && !compatible(context, component)) result.add(component);
         }
         return result;
     }
@@ -127,6 +163,9 @@ public final class FdroidInstaller {
         for (Component component : COMPONENTS) {
             if (result.length() > 0) result.append("\n");
             result.append(component.name).append(": ").append(installedVersion(context, component.packageName));
+            if (installed(context, component.packageName) && !compatible(context, component)) {
+                result.append(" • assinatura incompatível; desinstale a edição anterior");
+            }
             if (component.required) result.append(" • obrigatório");
         }
         return result.toString();
@@ -260,14 +299,14 @@ public final class FdroidInstaller {
             }
             if (total < 1024) throw new IOException("APK vazio ou incompleto");
         }
-        verifyArchive(component, output);
+        verifyArchive(component, output, component.sha256);
         return output;
     }
 
     private File prepare(Component component) throws Exception {
         try {
             return copyEmbedded(component);
-        } catch (IOException embeddedUnavailable) {
+        } catch (FileNotFoundException embeddedUnavailable) {
             return downloadFromFdroid(component);
         }
     }
@@ -281,18 +320,28 @@ public final class FdroidInstaller {
             metadata.disconnect();
         }
         int versionCode = json.optInt("suggestedVersionCode", -1);
+        String apkName = json.optString("suggestedApk", "");
+        String expectedHash = json.optString("suggestedHash", "");
         JSONArray packages = json.optJSONArray("packages");
         if (packages != null) {
             for (int i = 0; i < packages.length(); i++) {
                 JSONObject candidate = packages.optJSONObject(i);
-                if (candidate != null) versionCode = Math.max(versionCode, candidate.optInt("versionCode", -1));
+                if (candidate == null) continue;
+                int candidateVersion = candidate.optInt("versionCode", -1);
+                if (candidateVersion >= versionCode) {
+                    versionCode = candidateVersion;
+                    apkName = candidate.optString("apkName", "");
+                    expectedHash = candidate.optString("hash", candidate.optString("sha256", ""));
+                }
             }
         }
         if (versionCode < 0) throw new IOException("versão do F-Droid não encontrada");
+        if (apkName.isEmpty()) apkName = component.packageName + "_" + versionCode + ".apk";
+        if (expectedHash.isEmpty()) throw new IOException("F-Droid não forneceu SHA-256 para o APK");
         File directory = new File(context.getCacheDir(), "fdroid");
         if (!directory.exists() && !directory.mkdirs()) throw new IOException("não foi possível criar o cache");
         File output = new File(directory, component.packageName + "_" + versionCode + ".apk");
-        HttpURLConnection apk = connection("https://f-droid.org/repo/" + component.packageName + "_" + versionCode + ".apk");
+        HttpURLConnection apk = connection("https://f-droid.org/repo/" + apkName);
         try (InputStream input = apk.getInputStream(); OutputStream out = new FileOutputStream(output)) {
             byte[] buffer = new byte[32 * 1024];
             int count;
@@ -300,15 +349,64 @@ public final class FdroidInstaller {
         } finally {
             apk.disconnect();
         }
-        verifyArchive(component, output);
+        verifyArchive(component, output, expectedHash);
         return output;
     }
 
-    private void verifyArchive(Component component, File apk) throws IOException {
-        PackageInfo archive = context.getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), 0);
+    private void verifyArchive(Component component, File apk, String expectedSha256) throws IOException {
+        int flags = Build.VERSION.SDK_INT >= 28
+                ? PackageManager.GET_SIGNING_CERTIFICATES
+                : PackageManager.GET_SIGNATURES;
+        PackageInfo archive = context.getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), flags);
         if (archive == null || !component.packageName.equals(archive.packageName)) {
             throw new IOException("o APK não corresponde a " + component.packageName);
         }
+        if (expectedSha256 == null || expectedSha256.isEmpty()
+                || !expectedSha256.equalsIgnoreCase(fileSha256(apk))) {
+            throw new IOException("SHA-256 do APK não corresponde ao esperado");
+        }
+        Signature[] signatures;
+        if (Build.VERSION.SDK_INT >= 28) {
+            if (archive.signingInfo == null) throw new IOException("certificado do APK ausente");
+            signatures = archive.signingInfo.getApkContentsSigners();
+        } else {
+            signatures = archive.signatures;
+        }
+        if (signatures == null || signatures.length == 0) throw new IOException("certificado do APK ausente");
+        boolean trusted = false;
+        for (Signature signature : signatures) {
+            if (FDROID_CERT_SHA256.equalsIgnoreCase(signatureSha256(signature))) {
+                trusted = true;
+                break;
+            }
+        }
+        if (!trusted) throw new IOException("certificado do APK não é o certificado oficial do F-Droid");
+    }
+
+    private static String signatureSha256(Signature signature) throws IOException {
+        try {
+            return hex(MessageDigest.getInstance("SHA-256").digest(signature.toByteArray()));
+        } catch (java.security.GeneralSecurityException error) {
+            throw new IOException("SHA-256 indisponível", error);
+        }
+    }
+
+    private static String fileSha256(File file) throws IOException {
+        try (InputStream input = new FileInputStream(file)) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[64 * 1024];
+            int count;
+            while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count);
+            return hex(digest.digest());
+        } catch (java.security.GeneralSecurityException error) {
+            throw new IOException("SHA-256 indisponível", error);
+        }
+    }
+
+    private static String hex(byte[] bytes) {
+        StringBuilder result = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) result.append(String.format("%02x", value & 0xff));
+        return result.toString();
     }
 
     private static HttpURLConnection connection(String address) throws Exception {
@@ -326,7 +424,12 @@ public final class FdroidInstaller {
         StringBuilder result = new StringBuilder();
         byte[] buffer = new byte[16 * 1024];
         int count;
-        while ((count = input.read(buffer)) != -1) result.append(new String(buffer, 0, count, "UTF-8"));
+        int total = 0;
+        while ((count = input.read(buffer)) != -1) {
+            total += count;
+            if (total > 8 * 1024 * 1024) throw new IOException("metadados do F-Droid excedem o limite");
+            result.append(new String(buffer, 0, count, "UTF-8"));
+        }
         return result.toString();
     }
 
