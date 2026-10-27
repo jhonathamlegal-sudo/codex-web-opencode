@@ -40,7 +40,7 @@ javac -source 8 -target 8 -encoding UTF-8 \
 
 "$build_tools/d8" --lib "$platform/android.jar" --output "$out/dex" $(find "$classes" -name '*.class' -print)
 cp "$out/unsigned.apk" "$out/aligned.apk"
-zip -q -j "$out/aligned.apk" "$out/dex/classes.dex"
+zip -9 -q -j "$out/aligned.apk" "$out/dex/classes.dex"
 "${native_runner[@]}" "$build_tools/zipalign" -f 4 "$out/aligned.apk" "$out/CodexWeb-unsigned-aligned.apk"
 
 if [[ -n "${ANDROID_DEBUG_KEYSTORE:-}" ]]; then
