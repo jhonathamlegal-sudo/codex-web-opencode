@@ -92,7 +92,13 @@ if [ -z "$ORIGIN_URL" ]; then
   fail repository_conflict "O checkout $ROOT não possui um remote origin configurado"
 fi
 if [ -n "$REPOSITORY_URL" ] && [ "$(normalize_repo_url "$ORIGIN_URL")" != "$(normalize_repo_url "$REPOSITORY_URL")" ]; then
-  fail repository_conflict "O remote do checkout não corresponde à origem oficial configurada"
+  if [ -f "$ROOT/packages/cli/package.json" ]; then
+    write_status local_checkout "Checkout local válido preservado; remote diferente da origem do launcher"
+    printf '[%s] remote diferente da origem configurada; usando o checkout local existente sem alterar origin
+' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
+  else
+    fail repository_conflict "O remote do checkout não corresponde à origem oficial e o projeto local não parece OpenCode"
+  fi
 fi
 
 if [ -f "$HOME/.config/opencode/apinex.env" ]; then

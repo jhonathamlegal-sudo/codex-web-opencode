@@ -436,6 +436,12 @@ public final class MainActivity extends Activity {
         primaryAction.setOnClickListener(v -> startTermuxAndServer());
     }
 
+    private boolean canRunTermuxCommand() {
+        if (Build.VERSION.SDK_INT < 23) return true;
+        return checkSelfPermission("com.termux.permission.RUN_COMMAND") ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
     private boolean needsBatteryOptimization() {
         if (Build.VERSION.SDK_INT < 23) return false;
         try {
@@ -553,6 +559,10 @@ public final class MainActivity extends Activity {
         }
         if (!isTermuxInstalled()) {
             showTermuxMissing();
+            return;
+        }
+        if (!canRunTermuxCommand()) {
+            showExternalAppsInstructions();
             return;
         }
         if (needsBatteryOptimization() && !batteryPromptShown) {
