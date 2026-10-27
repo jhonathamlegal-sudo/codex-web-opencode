@@ -1,5 +1,7 @@
 <div align="center">
 
+![Codex Web banner](assets/codex-web-banner.png)
+
 # Codex Web
 
 ### OpenCode personalizado para Android + Termux
