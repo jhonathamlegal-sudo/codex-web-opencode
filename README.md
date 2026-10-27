@@ -1,43 +1,60 @@
-# Codex Web / OpenCode — edição Termux
+<div align="center">
 
-Esta é uma edição personalizada do [OpenCode](https://github.com/anomalyco/opencode)
-com interface web local, persistência de instruções `AGENTS.md` e launcher
-Android para preparar o ambiente no Termux.
+# Codex Web
 
-> Este repositório não é o projeto oficial OpenCode nem é afiliado aos seus
-> mantenedores. Alterações, APKs e suporte aqui são específicos desta edição.
+### OpenCode personalizado para Android + Termux
 
-## O que existe aqui
+Interface web local, persistência de instruções e launcher Android para preparar o ambiente no próprio aparelho.
 
-- servidor OpenCode local para a interface web;
-- edição persistente do `~/opencode/AGENTS.md`;
-- perfis `AGENT.md` por modelo em `~/.config/opencode/models/`;
-- APK `Codex Web` com instalador guiado de Termux, Termux:API, Termux:Boot e
-  Termux:Widget;
-- bootstrap que clona este repositório, instala dependências e compila o
-  cliente web;
-- autenticação local entre APK e servidor por senha aleatória.
+[![Status](https://img.shields.io/badge/status-em%20desenvolvimento-f2b84b?style=for-the-badge)](https://github.com/jhonathamlegal-sudo/codex-web-opencode)
+[![Android](https://img.shields.io/badge/Android-API%2026%2B-68e08a?style=for-the-badge&logo=android&logoColor=white)](android/codex-web/)
+[![Termux](https://img.shields.io/badge/Termux-suportado-111827?style=for-the-badge)](android/codex-web/README.md)
+[![Licença](https://img.shields.io/badge/licença-MIT-7aa2f7?style=for-the-badge)](LICENSE)
 
-## Instalação pelo Android
+</div>
 
-O APK está em [`android/codex-web/build/CodexWeb-debug.apk`](android/codex-web/build/CodexWeb-debug.apk).
+> [!IMPORTANT]
+> Este é um fork personalizado. Não é o aplicativo oficial do OpenCode nem é afiliado aos mantenedores upstream.
 
-1. Instale e abra o APK.
-2. Autorize as instalações solicitadas pelo Android.
-3. Abra o Termux uma vez para concluir a inicialização.
-4. Toque em **Verificar e instalar** e aguarde as confirmações do sistema.
-5. O launcher baixa o bootstrap, clona este repositório em `~/opencode`,
-   instala `git`, `curl`, `bun`, dependências e o build web.
-6. Habilite `allow-external-apps=true` em `~/.termux/termux.properties` se o
-   Termux bloquear comandos externos; depois reinicie o Termux.
+## O que este projeto entrega
 
-O Android exige confirmação manual para cada APK. O launcher não instala
-aplicativos silenciosamente.
+| Área | O que acontece |
+| --- | --- |
+| **Chat local** | A interface web conversa com o servidor OpenCode no mesmo aparelho. |
+| **Persistência** | O `~/opencode/AGENTS.md` global é a fonte real das instruções persistentes. |
+| **Perfis de modelo** | Cada modelo pode ter seu próprio `AGENT.md` em `~/.config/opencode/models/<provedor>/<modelo>/`. |
+| **Launcher Android** | Detecta Termux e inicia o servidor por botões, sem exigir comandos complexos. |
+| **Bootstrap** | Clona o repositório, instala dependências e prepara o cliente web no Termux. |
 
-## Configuração do provedor
+## Fluxo do aplicativo
 
-Chaves nunca ficam no GitHub nem dentro do APK. No celular que executará o
-servidor, crie o arquivo privado:
+```mermaid
+flowchart LR
+    A[Codex Web APK] --> B{Componentes no Android}
+    B -->|ausentes| C[Instalação confirmada pelo Android]
+    B -->|prontos| D[Termux]
+    C --> D
+    D --> E[Bootstrap do projeto]
+    E --> F[Servidor local 127.0.0.1:4096]
+    F --> G[Chat web]
+```
+
+## Instalação
+
+### Android
+
+1. Instale o APK e permita instalações solicitadas pelo Android.
+2. Aceite cada confirmação para Termux, Termux:API, Termux:Boot e Termux:Widget.
+3. Abra o Termux quando o launcher solicitar a primeira inicialização.
+4. Aguarde o clone, a instalação das dependências e a abertura do chat.
+
+O Android sempre exige confirmação explícita para instalar APKs. O launcher não contorna essa proteção.
+
+> **Estado do APK:** o repositório contém o código e o build reproduzível. Um APK com os quatro APKs oficiais embutidos pode ser gerado localmente; esses binários não ficam no Git comum porque o Termux ultrapassa o limite de arquivo do GitHub.
+
+### Configuração da chave do provedor
+
+A chave nunca fica no GitHub, no código ou no APK. No aparelho que executará o servidor:
 
 ```bash
 mkdir -p ~/.config/opencode
@@ -46,10 +63,9 @@ printf '%s\n' "APINEX_API_KEY='COLOQUE_A_SUA_CHAVE_AQUI'" \
 chmod 600 ~/.config/opencode/apinex.env
 ```
 
-Substitua o placeholder somente no aparelho destino. Não faça commit desse
-arquivo e não envie a chave pelo chat, issue ou pull request.
+Substitua o placeholder apenas no dispositivo. Não cole uma chave real em issue, pull request, screenshot ou conversa.
 
-## Instalação manual no Termux
+### Instalação manual no Termux
 
 ```bash
 pkg update -y
@@ -60,7 +76,7 @@ bun install --frozen-lockfile
 bun run --cwd packages/app build
 ```
 
-Para iniciar o servidor com autenticação local:
+Para iniciar manualmente:
 
 ```bash
 export OPENCODE_SERVER_PASSWORD="escolha-uma-senha-local"
@@ -71,60 +87,53 @@ O launcher usa `127.0.0.1:4096`; ele não publica o servidor na internet.
 
 ## Desenvolvimento
 
-Requisitos: Termux ou Linux, Git e Bun 1.3 ou superior.
+Requisitos: Linux ou Termux com Git, Bun 1.3+ e, para o APK, JDK, Android SDK e Build Tools.
 
 ```bash
-bun install
+bun install --frozen-lockfile
 bun run check
+cd packages/core && bun run test && bun typecheck
 ```
 
-Testes direcionados devem ser executados no pacote afetado:
+Para o APK:
 
 ```bash
-cd packages/core
-bun run test
-bun typecheck
+cd android/codex-web
+bash -n termux-start.sh
+ANDROID_SDK_ROOT=/caminho/android-sdk bash build.sh
 ```
 
-Para modificar a API pública, gere novamente os clientes a partir de
-`packages/client`; não edite arquivos gerados manualmente.
+O resultado aparece em `android/codex-web/build/CodexWeb-debug.apk`. Se `src/main/assets/fdroid/` existir, os APKs locais são embutidos; caso contrário, o código usa o fallback do F-Droid.
 
-Para compilar o APK, use JDK, Android SDK e Build Tools:
-
-```bash
-ANDROID_SDK_ROOT=/caminho/android-sdk android/codex-web/build.sh
-```
-
-O artefato será criado em `android/codex-web/build/CodexWeb-debug.apk`.
-
-## Arquitetura resumida
+## Estrutura principal
 
 ```text
-APK Android
-  ├─ instala componentes oficiais do F-Droid com confirmação do Android
-  ├─ envia RUN_COMMAND ao Termux
-  └─ abre a interface web local
-
-Termux
-  ├─ baixa o bootstrap do GitHub quando necessário
-  ├─ clona ~/opencode
-  ├─ instala dependências e compila packages/app
-  └─ executa o servidor em 127.0.0.1:4096
+android/codex-web/                         launcher e instalador Android
+android/codex-web/src/main/assets/fdroid/  APKs oficiais opcionais do F-Droid
+android/codex-web/termux-start.sh          bootstrap e servidor no Termux
+packages/app/                              interface web
+packages/core/                             núcleo, persistência e modelos
 ```
-
-O `AGENTS.md` global real fica em `~/opencode/AGENTS.md`. Perfis específicos
-de modelo ficam em `~/.config/opencode/models/<provedor>/<modelo>/AGENT.md`.
 
 ## Limites conhecidos
 
-- o APK não inclui nem descobre automaticamente a chave do provedor;
-- o Android pode exigir autorização para instalar APKs e comandos externos;
-- o cliente web depende de rede para clonar o repositório e baixar modelos;
-- o servidor é local ao aparelho; acesso remoto entre celulares não é ativado;
-- alterações locais não são sobrescritas pelo bootstrap automático.
+- O APK não descobre nem fornece automaticamente a chave do provedor.
+- A instalação de cada componente depende da confirmação do Android.
+- O servidor é local; acesso remoto entre celulares não é ativado automaticamente.
+- Um checkout existente e não vazio não é apagado pelo bootstrap.
+- Acesso a arquivos, processos e rede segue as permissões do usuário do Termux; não é um sandbox.
 
-## Contribuição e segurança
+## Documentação
 
-Leia [CONTRIBUTING.md](CONTRIBUTING.md) antes de abrir um pull request. Para
-falhas de segurança, siga [SECURITY.md](SECURITY.md) e não publique detalhes
-exploráveis em uma issue.
+| Documento | Para quem é |
+| --- | --- |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Quem deseja alterar ou testar o projeto. |
+| [`SECURITY.md`](SECURITY.md) | Política reconhecida pelo GitHub para vulnerabilidades. |
+| [`SEGURANÇA.md`](SEGURAN%C3%87A.md) | Versão pública da política em português. |
+| [`AGENTS.md`](AGENTS.md) | Regras de trabalho e persistência do checkout. |
+
+<div align="center">
+
+**Código público, credenciais privadas.**
+
+</div>
