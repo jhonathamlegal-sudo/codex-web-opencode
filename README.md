@@ -18,6 +18,13 @@ Interface web local, persistência de instruções e launcher Android para prepa
 > [!IMPORTANT]
 > Este é um fork personalizado. Não é o aplicativo oficial do OpenCode nem é afiliado aos mantenedores upstream.
 
+## Download BETA
+
+[Baixar CodexWeb-BETA.apk no MediaFire](https://www.mediafire.com/file/1cz8q42lv6gpp0t/CodexWeb-BETA.apk/file)
+
+> [!TIP]
+> Esta é uma versão BETA distribuída externamente. Confira a origem do arquivo antes de instalar.
+
 ## O que este projeto entrega
 
 | Área | O que acontece |
