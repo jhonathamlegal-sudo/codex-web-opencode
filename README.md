@@ -2,7 +2,7 @@
 
 ![Codex Web banner](assets/codex-web-banner.png)
 
-# Codex Web
+# Codex Android 
 
 ### OpenCode personalizado para Android + Termux
 
@@ -18,12 +18,12 @@ Interface web local, persistência de instruções e launcher Android para prepa
 > [!IMPORTANT]
 > Este é um fork personalizado. Não é o aplicativo oficial do OpenCode nem é afiliado aos mantenedores upstream.
 
-## Download BETA
+## Download versão 1.0.0 BETA
 
-[Baixar CodexWeb-BETA.apk no MediaFire](https://www.mediafire.com/file/1cz8q42lv6gpp0t/CodexWeb-BETA.apk/file)
+**[Click aqui para baixar Codex-Android](https://www.mediafire.com/file/1cz8q42lv6gpp0t/CodexWeb-BETA.apk/file)**
 
 > [!TIP]
-> Esta é uma versão BETA distribuída externamente. Confira a origem do arquivo antes de instalar.
+> Esta é uma versão BETA do projeto 
 
 ## O que este projeto entrega
 
@@ -51,7 +51,7 @@ flowchart LR
 ## Instalação
 
 ### Android
-
+0. [Baixei o APK](https://www.mediafire.com/file/1cz8q42lv6gpp0t/CodexWeb-BETA.apk/file)
 1. Instale o APK e permita instalações solicitadas pelo Android.
 2. Aceite cada confirmação para Termux, Termux:API, Termux:Boot e Termux:Widget.
 3. Abra o Termux quando o launcher solicitar a primeira inicialização.
