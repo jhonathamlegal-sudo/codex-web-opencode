@@ -117,6 +117,7 @@ public final class MainActivity extends Activity {
     private int commandAttempts;
     private String serverPassword;
     private boolean repairRequested;
+    private boolean connectionRequested;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -154,7 +155,12 @@ public final class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(commandOutputReceiver, outputFilter, RECEIVER_NOT_EXPORTED);
         else registerReceiver(commandOutputReceiver, outputFilter);
         buildUi();
-        if (!fdroidInstaller.resume(this, installerCallback())) refreshInstallerState();
+        if (!fdroidInstaller.resume(this, installerCallback())) {
+            refreshInstallerState();
+            if (FdroidInstaller.requiredMissing(this).isEmpty()) {
+                mainHandler.postDelayed(this::startTermuxAndServer, 250);
+            }
+        }
     }
 
     private void buildUi() {
@@ -426,7 +432,6 @@ public final class MainActivity extends Activity {
         primaryAction.setText("Iniciar conexão");
         primaryAction.setEnabled(true);
         primaryAction.setOnClickListener(v -> startTermuxAndServer());
-        if (isTermuxInstalled()) startTermuxAndServer();
     }
 
     private void refreshBatteryState() {
@@ -520,7 +525,8 @@ public final class MainActivity extends Activity {
             showTermuxMissing();
             return;
         }
-        setState("CONECTANDO", AMBER, "Iniciando o Termux…", "Solicitando ao Termux que execute o servidor local.", true);
+        connectionRequested = true;
+        setState("CONECTANDO", AMBER, "Iniciando o serviço do Termux…", "Executando o servidor em segundo plano; esta tela permanecerá aberta.", true);
         openTermuxAction.setVisibility(View.VISIBLE);
         primaryAction.setEnabled(false);
         repairRequested = false;
@@ -529,18 +535,8 @@ public final class MainActivity extends Activity {
     }
 
     private void launchTermuxThenCommand() {
-        try {
-            Intent launch = getPackageManager().getLaunchIntentForPackage(TERMUX_PACKAGE);
-            if (launch != null) {
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(launch);
-            }
-        } catch (ActivityNotFoundException ignored) {
-            showTermuxMissing();
-            return;
-        }
-        connectionDetail.setText("Termux aberto; aguardando o serviço de comandos…");
-        mainHandler.postDelayed(this::attemptExternalCommand, 3500);
+        connectionDetail.setText("Serviço do Termux em segundo plano; aguardando resposta…");
+        mainHandler.postDelayed(this::attemptExternalCommand, 350);
     }
 
     private void attemptExternalCommand() {
@@ -938,7 +934,7 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (componentsStatus != null && fdroidInstaller != null && !fdroidInstaller.isRunning()
-                && webView.getVisibility() != View.VISIBLE) refreshInstallerState();
+                && webView.getVisibility() != View.VISIBLE && !connectionRequested) refreshInstallerState();
     }
 
     @Override
