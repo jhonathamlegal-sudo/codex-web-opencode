@@ -79,8 +79,20 @@ if [ ! -d "$ROOT/packages/cli" ]; then
   git clone --depth 1 "$REPOSITORY_URL" "$ROOT" >> "$LOG_FILE" 2>&1 || fail clone_error "Falha ao clonar o repositório GitHub"
 fi
 
-if [ ! -f "$CONFIG_FILE" ]; then
-  fail config_missing "Configuração não encontrada em $CONFIG_FILE"
+normalize_repo_url() {
+  printf '%s' "$1" | sed 's#/$##; s#\.git$##'
+}
+
+if [ ! -d "$ROOT/.git" ]; then
+  fail repository_conflict "O diretório $ROOT não é um checkout Git válido"
+fi
+
+ORIGIN_URL="$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)"
+if [ -z "$ORIGIN_URL" ]; then
+  fail repository_conflict "O checkout $ROOT não possui um remote origin configurado"
+fi
+if [ -n "$REPOSITORY_URL" ] && [ "$(normalize_repo_url "$ORIGIN_URL")" != "$(normalize_repo_url "$REPOSITORY_URL")" ]; then
+  fail repository_conflict "O remote do checkout não corresponde à origem oficial configurada"
 fi
 
 if [ -f "$HOME/.config/opencode/apinex.env" ]; then
@@ -92,17 +104,22 @@ if [ -z "${APINEX_API_KEY:-}" ]; then
   fail key_missing "APINEX_API_KEY ausente em ~/.config/opencode/apinex.env"
 fi
 
+if git -C "$ROOT" diff --quiet && git -C "$ROOT" diff --cached --quiet; then
+  write_status updating "Verificando atualizações do projeto…"
+  git -C "$ROOT" pull --ff-only >> "$LOG_FILE" 2>&1 ||     printf '[%s] atualização automática não aplicada; mantendo checkout local íntegro\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
+else
+  write_status local_changes "Alterações locais preservadas; atualização automática pausada"
+  printf '[%s] alterações locais detectadas; nenhum reset ou descarte foi executado\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
+fi
+
+if [ ! -f "$CONFIG_FILE" ]; then
+  fail config_missing "Configuração não encontrada em $CONFIG_FILE"
+fi
+
 if command -v sha256sum >/dev/null 2>&1; then
   PROJECT_HASH="$(sha256sum "$ROOT/package.json" "$ROOT/bun.lock" 2>/dev/null | sha256sum | awk '{print $1}')"
 else
   PROJECT_HASH="$(cksum "$ROOT/package.json" "$ROOT/bun.lock" 2>/dev/null | cksum | awk '{print $1 ":" $2}')"
-fi
-
-if git -C "$ROOT" remote get-url origin >/dev/null 2>&1 \
-    && git -C "$ROOT" diff --quiet \
-    && git -C "$ROOT" diff --cached --quiet; then
-  git -C "$ROOT" pull --ff-only >> "$LOG_FILE" 2>&1 || \
-    printf '[%s] atualização automática ignorada; mantendo versão local\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
 fi
 
 if [ ! -s "$BOOTSTRAP_STAMP" ] || [ "$(cat "$BOOTSTRAP_STAMP")" != "$PROJECT_HASH" ] \

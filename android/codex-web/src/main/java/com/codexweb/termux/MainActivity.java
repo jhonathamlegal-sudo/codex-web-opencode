@@ -19,6 +19,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.text.InputType;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
@@ -31,6 +32,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -60,6 +62,8 @@ public final class MainActivity extends Activity {
     private static final String SERVER_URL = "http://127.0.0.1:4096";
     private static final String SERVER_INFO_URL = SERVER_URL + "/api/info";
     private static final String SERVER_SESSION_URL = SERVER_URL + "/api/session?limit=1";
+    private static final String APINEX_MODELS_URL = "https://apinex.bond/v1/models";
+    private static final String APINEX_SITE_URL = "https://apinex.bond/";
     private static final String STATUS_ACTION = "com.codexweb.termux.STATUS_RESULT";
     private static final String LOG_ACTION = "com.codexweb.termux.LOG_RESULT";
     private static final int MAX_PROBES = 60;
@@ -98,6 +102,12 @@ public final class MainActivity extends Activity {
     private Button chatAction;
     private Button viewLogAction;
     private Button copyLogAction;
+    private LinearLayout keyCard;
+    private EditText apiKeyInput;
+    private Button saveKeyAction;
+    private Button openApiKeyAction;
+    private Button toggleKeyAction;
+    private boolean keyVisible;
     private TextView componentsStatus;
     private FdroidInstaller fdroidInstaller;
     private BroadcastReceiver installReceiver;
@@ -144,7 +154,7 @@ public final class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(commandOutputReceiver, outputFilter, RECEIVER_NOT_EXPORTED);
         else registerReceiver(commandOutputReceiver, outputFilter);
         buildUi();
-        refreshInstallerState();
+        if (!fdroidInstaller.resume(this, installerCallback())) refreshInstallerState();
     }
 
     private void buildUi() {
@@ -220,7 +230,7 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams componentsParams = new LinearLayout.LayoutParams(-1, -2);
         componentsParams.topMargin = dp(14);
         installerCard.addView(componentsStatus, componentsParams);
-        installComponentsAction = actionButton("Verificar e instalar", true);
+        installComponentsAction = actionButton("Instalar e configurar", true);
         installComponentsAction.setOnClickListener(v -> installComponents());
         LinearLayout.LayoutParams installButtonParams = new LinearLayout.LayoutParams(-1, dp(48));
         installButtonParams.topMargin = dp(14);
@@ -231,6 +241,9 @@ public final class MainActivity extends Activity {
         batteryParams.topMargin = dp(10);
         installerCard.addView(batteryAction, batteryParams);
         content.addView(installerCard, marginTop(dp(14)));
+
+        keyCard = buildApiKeyCard();
+        content.addView(keyCard, marginTop(dp(14)));
 
         primaryAction = actionButton("Iniciar conexão", true);
         primaryAction.setOnClickListener(v -> startTermuxAndServer());
@@ -296,6 +309,57 @@ public final class MainActivity extends Activity {
         setContentView(root);
     }
 
+    private LinearLayout buildApiKeyCard() {
+        LinearLayout card = card();
+        card.addView(text("Conectar à APInex", 17, TEXT, true));
+        TextView explanation = text("A chave é usada somente pelo servidor local para liberar os modelos do provedor.", 14, MUTED, false);
+        LinearLayout.LayoutParams explanationParams = new LinearLayout.LayoutParams(-1, -2);
+        explanationParams.topMargin = dp(7);
+        card.addView(explanation, explanationParams);
+
+        apiKeyInput = new EditText(this);
+        apiKeyInput.setSingleLine(true);
+        apiKeyInput.setHint("Cole sua API key");
+        apiKeyInput.setTextColor(TEXT);
+        apiKeyInput.setHintTextColor(MUTED);
+        apiKeyInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        apiKeyInput.setPadding(dp(14), 0, dp(14), 0);
+        apiKeyInput.setBackground(round(SURFACE_2, 12));
+        LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(-1, dp(52));
+        inputParams.topMargin = dp(14);
+        card.addView(apiKeyInput, inputParams);
+
+        toggleKeyAction = actionButton("Mostrar key", false);
+        toggleKeyAction.setOnClickListener(v -> {
+            keyVisible = !keyVisible;
+            apiKeyInput.setInputType(InputType.TYPE_CLASS_TEXT
+                    | (keyVisible ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                    : InputType.TYPE_TEXT_VARIATION_PASSWORD));
+            toggleKeyAction.setText(keyVisible ? "Ocultar key" : "Mostrar key");
+            apiKeyInput.setSelection(apiKeyInput.length());
+        });
+        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(-1, dp(42));
+        toggleParams.topMargin = dp(6);
+        card.addView(toggleKeyAction, toggleParams);
+
+        saveKeyAction = actionButton("Validar e salvar a key", true);
+        saveKeyAction.setOnClickListener(v -> validateAndSaveApiKey());
+        LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(-1, dp(48));
+        saveParams.topMargin = dp(10);
+        card.addView(saveKeyAction, saveParams);
+
+        openApiKeyAction = actionButton("Ainda não tem a key? Clique aqui para obter", false);
+        openApiKeyAction.setTextColor(BLUE);
+        openApiKeyAction.setBackgroundColor(Color.TRANSPARENT);
+        openApiKeyAction.setOnClickListener(v -> openUrl(APINEX_SITE_URL));
+        LinearLayout.LayoutParams linkParams = new LinearLayout.LayoutParams(-1, dp(48));
+        linkParams.topMargin = dp(4);
+        card.addView(openApiKeyAction, linkParams);
+
+        card.setVisibility(View.GONE);
+        return card;
+    }
+
     private void configureWebView(WebView view) {
         WebSettings settings = view.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -346,11 +410,11 @@ public final class MainActivity extends Activity {
 
     private void refreshInstallerState() {
         String summary = FdroidInstaller.summary(this);
-        componentsStatus.setText(summary);
+        componentsStatus.setText(summary + "\n" + FdroidInstaller.details(this));
         refreshBatteryState();
         if (!FdroidInstaller.requiredMissing(this).isEmpty()) {
             setState("PREPARAÇÃO", AMBER, "Ambiente incompleto", "Instale os componentes oficiais para liberar a conexão automática.", false);
-            primaryAction.setText("Instalar componentes");
+            primaryAction.setText("Instalar e configurar");
             primaryAction.setEnabled(true);
             primaryAction.setOnClickListener(v -> installComponents());
             openTermuxAction.setVisibility(View.GONE);
@@ -411,7 +475,11 @@ public final class MainActivity extends Activity {
         primaryAction.setEnabled(false);
         installComponentsAction.setEnabled(false);
         setState("INSTALANDO", AMBER, "Preparando componentes…", "O Android exibirá uma confirmação para cada APK.", true);
-        fdroidInstaller.start(this, new FdroidInstaller.Callback() {
+        fdroidInstaller.start(this, installerCallback());
+    }
+
+    private FdroidInstaller.Callback installerCallback() {
+        return new FdroidInstaller.Callback() {
             @Override
             public void status(String message) {
                 componentsStatus.setText(message);
@@ -437,10 +505,10 @@ public final class MainActivity extends Activity {
                     installComponentsAction.setText("Tentar instalação novamente");
                     return;
                 }
-                componentsStatus.setText(FdroidInstaller.summary(MainActivity.this));
+                componentsStatus.setText(FdroidInstaller.details(MainActivity.this));
                 startTermuxAndServer();
             }
-        });
+        };
     }
 
     private void startTermuxAndServer() {
@@ -472,7 +540,7 @@ public final class MainActivity extends Activity {
             return;
         }
         connectionDetail.setText("Termux aberto; aguardando o serviço de comandos…");
-        mainHandler.postDelayed(this::attemptExternalCommand, 1400);
+        mainHandler.postDelayed(this::attemptExternalCommand, 3500);
     }
 
     private void attemptExternalCommand() {
@@ -569,7 +637,7 @@ public final class MainActivity extends Activity {
 
     private void showTermuxMissing() {
         setState("TERMUX AUSENTE", RED, "Termux não encontrado", "Use o instalador guiado para baixar o Termux e suas extensões do F-Droid.", false);
-        primaryAction.setText("Instalar componentes");
+        primaryAction.setText("Instalar e configurar");
         primaryAction.setEnabled(true);
         primaryAction.setOnClickListener(v -> installComponents());
         openTermuxAction.setVisibility(View.GONE);
@@ -595,7 +663,7 @@ public final class MainActivity extends Activity {
         else if ("starting".equals(phase) || "checking".equals(phase)) setState("PREPARAÇÃO", AMBER, "Preparando servidor…", message, true);
         else if ("online".equals(phase)) setState("ONLINE", GREEN, "Servidor online", message + " Tempo: " + elapsed + "s", false);
         else if ("zombie_restart".equals(phase)) setState("RECUPERANDO", AMBER, "Servidor zumbi detectado", message, true);
-        else if ("repair_required".equals(phase)) showRepairRequired();
+        else if ("repair_required".equals(phase) || "repository_conflict".equals(phase)) showRepairRequired();
         else if ("key_missing".equals(phase)) showKeyMissing();
         else if (phase.endsWith("_error") || "config_missing".equals(phase)) showBootstrapError(message);
     }
@@ -605,18 +673,82 @@ public final class MainActivity extends Activity {
         primaryAction.setText("Reparar com backup seguro");
         primaryAction.setEnabled(true);
         primaryAction.setOnClickListener(v -> sendRunCommandForRepair());
-        setupHint.setText("O diretório atual será renomeado para ~/opencode-user-backup-AAAAmmdd-HHmmss antes de um novo clone.");
+        setupHint.setText("O diretório atual será renomeado para ~/opencode-user-backup-AAAAmmdd-HHmmss antes de um novo clone. Nada será apagado.");
         progress.setVisibility(View.GONE);
     }
 
     private void showKeyMissing() {
         setState("CONFIGURAÇÃO", AMBER, "Chave APINEX ausente", "Configure a chave no Termux para liberar os modelos gratuitos.", false);
-        setupHint.setText("No Termux, crie ~/.config/opencode/apinex.env com APINEX_API_KEY= sua-chave e toque em Tentar novamente.");
+        keyCard.setVisibility(View.VISIBLE);
+        saveKeyAction.setEnabled(true);
+        setupHint.setText("Você pode inserir a key no cartão acima. Como alternativa, configure ~/.config/opencode/apinex.env no Termux.");
         codeBlock.setText("mkdir -p ~/.config/opencode && printf '%s\\n' 'APINEX_API_KEY=sua-chave-aqui' > ~/.config/opencode/apinex.env && chmod 600 ~/.config/opencode/apinex.env");
         primaryAction.setText("Tentar novamente");
         primaryAction.setEnabled(true);
         primaryAction.setOnClickListener(v -> startTermuxAndServer());
         progress.setVisibility(View.GONE);
+    }
+
+    private void validateAndSaveApiKey() {
+        final String key = apiKeyInput.getText().toString().trim();
+        if (key.isEmpty()) {
+            apiKeyInput.setError("Insira uma API key.");
+            return;
+        }
+        saveKeyAction.setEnabled(false);
+        setState("VALIDANDO", BLUE, "Validando a key APInex…", "A chave não será gravada se a API rejeitá-la.", true);
+        executor.execute(() -> {
+            boolean valid = validateApiKey(key);
+            mainHandler.post(() -> {
+                if (!valid) {
+                    saveKeyAction.setEnabled(true);
+                    setState("ERRO", RED, "A API key foi rejeitada", "Confira a chave no site oficial da APInex e tente novamente.", false);
+                    return;
+                }
+                sendApiKeyToTermux(key);
+            });
+        });
+    }
+
+    private boolean validateApiKey(String key) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(APINEX_MODELS_URL).openConnection();
+            connection.setConnectTimeout(8000);
+            connection.setReadTimeout(12000);
+            connection.setRequestProperty("Authorization", "Bearer " + key);
+            connection.setRequestProperty("Accept", "application/json");
+            return connection.getResponseCode() == HttpURLConnection.HTTP_OK;
+        } catch (IOException ignored) {
+            return false;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private void sendApiKeyToTermux(String key) {
+        String command = "umask 077; mkdir -p \"$HOME/.config/opencode\"; "
+                + "IFS= read -r APINEX_API_KEY; "
+                + "case \"$APINEX_API_KEY\" in *[[:cntrl:]]*) exit 2;; esac; "
+                + "printf 'APINEX_API_KEY=%s\\n' \"$APINEX_API_KEY\" > \"$HOME/.config/opencode/apinex.env\"; "
+                + "chmod 600 \"$HOME/.config/opencode/apinex.env\"; unset APINEX_API_KEY";
+        try {
+            Intent intent = new Intent("com.termux.RUN_COMMAND");
+            intent.setClassName(TERMUX_PACKAGE, TERMUX_SERVICE);
+            intent.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash");
+            intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{"-lc", command});
+            intent.putExtra("com.termux.RUN_COMMAND_STDIN", key + "\n");
+            intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
+            intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
+            startService(intent);
+            apiKeyInput.setText("");
+            keyCard.setVisibility(View.GONE);
+            setState("CONFIGURAÇÃO", GREEN, "Key salva no Termux", "O servidor será reiniciado para carregar a configuração.", true);
+            mainHandler.postDelayed(this::startTermuxAndServer, 1800);
+        } catch (SecurityException error) {
+            saveKeyAction.setEnabled(true);
+            showExternalAppsInstructions();
+        }
     }
 
     private void showBootstrapError(String message) {
@@ -628,7 +760,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showExternalAppsInstructions() {
-        setState("AÇÃO NECESSÁRIA", AMBER, "Permissão externa bloqueada", "O Termux está instalado, mas ainda não aceita comandos enviados por outros aplicativos.", false);
+        setState("AÇÃO NECESSÁRIA", AMBER, "Permissão externa bloqueada", "Conceda ao Codex Web a permissão Android “Executar comandos no Termux” e ative allow-external-apps no Termux.", false);
         setupHint.setText("No Termux, execute o comando abaixo. Depois feche e abra o Termux novamente e toque em Verificar conexão.");
         primaryAction.setText("Verificar conexão");
         primaryAction.setEnabled(true);

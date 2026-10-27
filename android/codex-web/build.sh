@@ -41,7 +41,12 @@ javac -source 8 -target 8 -encoding UTF-8 \
 "$build_tools/d8" --lib "$platform/android.jar" --output "$out/dex" $(find "$classes" -name '*.class' -print)
 cp "$out/unsigned.apk" "$out/aligned.apk"
 zip -9 -q -j "$out/aligned.apk" "$out/dex/classes.dex"
-"${native_runner[@]}" "$build_tools/zipalign" -f 4 "$out/aligned.apk" "$out/CodexWeb-unsigned-aligned.apk"
+if command -v zipalign >/dev/null 2>&1; then
+  zipalign -f 4 "$out/aligned.apk" "$out/CodexWeb-unsigned-aligned.apk"
+else
+  echo "Aviso: zipalign não está disponível no Termux; assinando APK não alinhado." >&2
+  cp "$out/aligned.apk" "$out/CodexWeb-unsigned-aligned.apk"
+fi
 
 if [[ -n "${ANDROID_DEBUG_KEYSTORE:-}" ]]; then
   keystore="$ANDROID_DEBUG_KEYSTORE"
