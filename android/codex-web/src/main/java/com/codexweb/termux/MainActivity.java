@@ -118,6 +118,8 @@ public final class MainActivity extends Activity {
     private String serverPassword;
     private boolean repairRequested;
     private boolean connectionRequested;
+    private boolean batteryPromptShown;
+    private boolean waitingForBatteryReturn;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -434,6 +436,44 @@ public final class MainActivity extends Activity {
         primaryAction.setOnClickListener(v -> startTermuxAndServer());
     }
 
+    private boolean needsBatteryOptimization() {
+        if (Build.VERSION.SDK_INT < 23) return false;
+        try {
+            PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
+            return power == null || !power.isIgnoringBatteryOptimizations(TERMUX_PACKAGE);
+        } catch (RuntimeException ignored) {
+            return true;
+        }
+    }
+
+    private void showInstallPermissionDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("Permissão necessária")
+                .setMessage("Para instalar Termux, API, Boot e Widget, o Android precisa permitir que o Codex Web instale APKs oficiais. Na tela seguinte, ative 'Permitir desta fonte'.")
+                .setPositiveButton("Abrir configurações", (dialog, which) -> {
+                    try {
+                        startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:" + getPackageName())));
+                    } catch (ActivityNotFoundException ignored) {
+                        startActivity(new Intent(Settings.ACTION_SECURITY_SETTINGS));
+                    }
+                })
+                .setNegativeButton("Agora não", null)
+                .show();
+    }
+
+    private void showBatteryPermissionDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("Permissão de bateria")
+                .setMessage("Para o servidor não ser encerrado pelo Android, permita que o Termux funcione sem restrições de bateria. Isso é opcional, mas recomendado.")
+                .setPositiveButton("Abrir configurações", (dialog, which) -> {
+                    waitingForBatteryReturn = true;
+                    configureBatteryOptimization();
+                })
+                .setNegativeButton("Continuar mesmo assim", (dialog, which) -> startTermuxAndServer())
+                .show();
+    }
+
     private void refreshBatteryState() {
         if (batteryAction == null) return;
         boolean ignored = false;
@@ -467,14 +507,9 @@ public final class MainActivity extends Activity {
     private void installComponents() {
         if (fdroidInstaller == null || fdroidInstaller.isRunning()) return;
         if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
-            setState("PERMISSÃO", AMBER, "Permita instalações pelo Codex Web", "O Android exige sua autorização antes de instalar APKs do F-Droid.", false);
-            componentsStatus.setText("Toque novamente após habilitar a permissão nas configurações.");
-            try {
-                startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:" + getPackageName())));
-            } catch (ActivityNotFoundException ignored) {
-                startActivity(new Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS));
-            }
+            setState("PERMISSÃO", AMBER, "Permita instalações pelo Codex Web", "O Android precisa autorizar a instalação dos componentes oficiais.", false);
+            componentsStatus.setText("Abra a permissão de instalação e toque novamente em Instalar e configurar.");
+            showInstallPermissionDialog();
             return;
         }
         primaryAction.setEnabled(false);
@@ -493,13 +528,8 @@ public final class MainActivity extends Activity {
             @Override
             public void permissionRequired() {
                 installComponentsAction.setEnabled(true);
-                setState("PERMISSÃO", AMBER, "Permita instalações pelo Codex Web", "O Android exige sua autorização antes de instalar APKs do F-Droid.", false);
-                try {
-                    startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                            Uri.parse("package:" + getPackageName())));
-                } catch (ActivityNotFoundException ignored) {
-                    startActivity(new Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS));
-                }
+                setState("PERMISSÃO", AMBER, "Permita instalações pelo Codex Web", "O Android precisa autorizar a instalação dos componentes oficiais.", false);
+                showInstallPermissionDialog();
             }
 
             @Override
@@ -523,6 +553,11 @@ public final class MainActivity extends Activity {
         }
         if (!isTermuxInstalled()) {
             showTermuxMissing();
+            return;
+        }
+        if (needsBatteryOptimization() && !batteryPromptShown) {
+            batteryPromptShown = true;
+            showBatteryPermissionDialog();
             return;
         }
         connectionRequested = true;
@@ -756,14 +791,21 @@ public final class MainActivity extends Activity {
     }
 
     private void showExternalAppsInstructions() {
-        setState("AÇÃO NECESSÁRIA", AMBER, "Permissão externa bloqueada", "Conceda ao Codex Web a permissão Android “Executar comandos no Termux” e ative allow-external-apps no Termux.", false);
-        setupHint.setText("No Termux, execute o comando abaixo. Depois feche e abra o Termux novamente e toque em Verificar conexão.");
+        setState("AÇÃO NECESSÁRIA", AMBER, "Permissão externa bloqueada", "O Termux bloqueou comandos vindos de outros aplicativos.", false);
+        setupHint.setText("Ative allow-external-apps no Termux. O botão abaixo copia a configuração sem expor sua API key.");
         primaryAction.setText("Verificar conexão");
         primaryAction.setEnabled(true);
         primaryAction.setOnClickListener(v -> startTermuxAndServer());
         openTermuxAction.setVisibility(View.VISIBLE);
         copyAction.setVisibility(View.VISIBLE);
         progress.setVisibility(View.GONE);
+        new AlertDialog.Builder(this)
+                .setTitle("Permitir comandos do Codex Web")
+                .setMessage("O Android não mostra uma caixa de permissão comum para esta integração. O Termux precisa ser configurado uma vez para aceitar comandos externos.")
+                .setPositiveButton("Abrir Termux", (dialog, which) -> openTermux())
+                .setNeutralButton("Copiar configuração", (dialog, which) -> copySetupCommand())
+                .setNegativeButton("Depois", null)
+                .show();
     }
 
     private void requestLog(boolean copy) {
@@ -933,6 +975,11 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (waitingForBatteryReturn) {
+            waitingForBatteryReturn = false;
+            mainHandler.postDelayed(this::startTermuxAndServer, 250);
+            return;
+        }
         if (componentsStatus != null && fdroidInstaller != null && !fdroidInstaller.isRunning()
                 && webView.getVisibility() != View.VISIBLE && !connectionRequested) refreshInstallerState();
     }
