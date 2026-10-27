@@ -55,6 +55,8 @@ public final class MainActivity extends Activity {
             "https://github.com/jhonathamlegal-sudo/codex-web-opencode.git";
     private static final String BOOTSTRAP_SCRIPT_URL =
             "https://raw.githubusercontent.com/jhonathamlegal-sudo/codex-web-opencode/main/android/codex-web/termux-start.sh";
+    private static final String WATCHDOG_SCRIPT_URL =
+            "https://raw.githubusercontent.com/jhonathamlegal-sudo/codex-web-opencode/main/android/codex-web/termux-watchdog.sh";
     private static final String SERVER_URL = "http://127.0.0.1:4096";
     private static final String SERVER_INFO_URL = SERVER_URL + "/api/info";
     private static final String SERVER_SESSION_URL = SERVER_URL + "/api/session?limit=1";
@@ -102,7 +104,9 @@ public final class MainActivity extends Activity {
     private BroadcastReceiver commandOutputReceiver;
     private int commandRequestCode;
     private int probeCount;
+    private int commandAttempts;
     private String serverPassword;
+    private boolean repairRequested;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -451,28 +455,54 @@ public final class MainActivity extends Activity {
         setState("CONECTANDO", AMBER, "Iniciando o Termux…", "Solicitando ao Termux que execute o servidor local.", true);
         openTermuxAction.setVisibility(View.VISIBLE);
         primaryAction.setEnabled(false);
-        mainHandler.postDelayed(() -> {
-            try {
-                sendRunCommand(false);
-                probeCount = 0;
-                requestStatus();
-                probeServer();
-            } catch (SecurityException error) {
+        repairRequested = false;
+        commandAttempts = 0;
+        launchTermuxThenCommand();
+    }
+
+    private void launchTermuxThenCommand() {
+        try {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(TERMUX_PACKAGE);
+            if (launch != null) {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(launch);
+            }
+        } catch (ActivityNotFoundException ignored) {
+            showTermuxMissing();
+            return;
+        }
+        connectionDetail.setText("Termux aberto; aguardando o serviço de comandos…");
+        mainHandler.postDelayed(this::attemptExternalCommand, 1400);
+    }
+
+    private void attemptExternalCommand() {
+        try {
+            sendRunCommand(repairRequested);
+            probeCount = 0;
+            requestStatus();
+            probeServer();
+        } catch (SecurityException error) {
+            commandAttempts++;
+            if (commandAttempts < 8) {
+                connectionDetail.setText("Aguardando o Termux… tentativa " + commandAttempts + "/7");
+                mainHandler.postDelayed(this::attemptExternalCommand, 2500);
+            } else {
                 showExternalAppsInstructions();
             }
-        }, 850);
+        }
     }
 
     private void sendRunCommand(boolean repair) {
-        String command = "export OPENCODE_REPOSITORY_URL='" + shellQuote(OPENCODE_REPOSITORY_URL)
+        String command = "mkdir -p \"$HOME/.cache/codex-web\"; "
+                + "pkg install -y curl git >> \"$HOME/.cache/codex-web/server.log\" 2>&1 || exit 1; "
+                + "curl -fsSL '" + shellQuote(BOOTSTRAP_SCRIPT_URL) + "' -o \"$HOME/.cache/codex-web/termux-start.sh.new\" || exit 1; "
+                + "mv \"$HOME/.cache/codex-web/termux-start.sh.new\" \"$HOME/.cache/codex-web/termux-start.sh\" || exit 1; "
+                + "chmod 700 \"$HOME/.cache/codex-web/termux-start.sh\"; "
+                + "export OPENCODE_WATCHDOG_URL='" + shellQuote(WATCHDOG_SCRIPT_URL)
+                + "'; export OPENCODE_REPOSITORY_URL='" + shellQuote(OPENCODE_REPOSITORY_URL)
                 + "'; export OPENCODE_SERVER_PASSWORD='" + shellQuote(serverPassword)
                 + "'; export OPENCODE_REPAIR='" + (repair ? "1" : "0")
-                + "'; script=\"$HOME/opencode/android/codex-web/termux-start.sh\"; "
-                + "if [ ! -f \"$script\" ]; then "
-                + "mkdir -p \"$HOME/.cache/codex-web\"; "
-                + "pkg install -y curl git >> \"$HOME/.cache/codex-web/server.log\" 2>&1 || exit 1; "
-                + "curl -fsSL '" + shellQuote(BOOTSTRAP_SCRIPT_URL) + "' -o \"$HOME/.cache/codex-web/termux-start.sh\" || exit 1; "
-                + "script=\"$HOME/.cache/codex-web/termux-start.sh\"; fi; "
+                + "'; script=\"$HOME/.cache/codex-web/termux-start.sh\"; "
                 + "exec bash \"$script\"";
         Intent intent = new Intent("com.termux.RUN_COMMAND");
         intent.setClassName(TERMUX_PACKAGE, TERMUX_SERVICE);
@@ -484,11 +514,10 @@ public final class MainActivity extends Activity {
     }
 
     private void sendRunCommandForRepair() {
+        repairRequested = true;
+        commandAttempts = 0;
         try {
-            sendRunCommand(true);
-            probeCount = 0;
-            requestStatus();
-            probeServer();
+            launchTermuxThenCommand();
         } catch (SecurityException error) {
             showExternalAppsInstructions();
         }

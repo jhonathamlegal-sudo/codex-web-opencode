@@ -109,9 +109,18 @@ if [ ! -s "$BOOTSTRAP_STAMP" ] || [ "$(cat "$BOOTSTRAP_STAMP")" != "$PROJECT_HAS
     || [ ! -d "$ROOT/packages/app/dist" ]; then
   write_status installing "Instalando dependências do OpenCode…"
   cd "$ROOT"
-  if [ -f bun.lock ]; then bun install --frozen-lockfile >> "$LOG_FILE" 2>&1; else bun install >> "$LOG_FILE" 2>&1; fi
+  if [ -f bun.lock ]; then bun install --frozen-lockfile --ignore-scripts >> "$LOG_FILE" 2>&1; else bun install --ignore-scripts >> "$LOG_FILE" 2>&1; fi
   write_status compiling "Compilando a interface web…"
-  bun run --cwd packages/app build >> "$LOG_FILE" 2>&1 || fail build_error "Falha ao compilar a interface web"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --signal=TERM --kill-after=8s 300s bun run --cwd packages/app build >> "$LOG_FILE" 2>&1 || {
+      if [ ! -f "$ROOT/packages/app/dist/index.html" ]; then
+        fail build_error "Falha ou timeout ao compilar a interface web"
+      fi
+      printf '[%s] build atingiu timeout, mas dist/index.html existe; continuando\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
+    }
+  else
+    bun run --cwd packages/app build >> "$LOG_FILE" 2>&1 || fail build_error "Falha ao compilar a interface web"
+  fi
   printf '%s\n' "$PROJECT_HASH" > "$BOOTSTRAP_STAMP"
   chmod 600 "$BOOTSTRAP_STAMP"
 fi
@@ -172,7 +181,16 @@ chmod 600 "$PASSWORD_FILE" "$CONFIG_HASH_FILE"
 write_status starting "Iniciando o servidor local…"
 
 WATCHDOG_SCRIPT="$ROOT/android/codex-web/termux-watchdog.sh"
-[ -f "$WATCHDOG_SCRIPT" ] || fail watchdog_missing "Watchdog não encontrado no checkout; atualize ou repare o projeto"
+if [ ! -f "$WATCHDOG_SCRIPT" ]; then
+  WATCHDOG_URL="${OPENCODE_WATCHDOG_URL:-}"
+  if [ -n "$WATCHDOG_URL" ] && command -v curl >/dev/null 2>&1; then
+    mkdir -p "$(dirname "$WATCHDOG_SCRIPT")"
+    curl -fsSL "$WATCHDOG_URL" -o "$WATCHDOG_SCRIPT" || fail watchdog_missing "Não foi possível baixar o watchdog atualizado"
+    chmod 700 "$WATCHDOG_SCRIPT"
+  else
+    fail watchdog_missing "Watchdog não encontrado no checkout; atualize ou repare o projeto"
+  fi
+fi
 
 nohup bash "$WATCHDOG_SCRIPT" "$PASSWORD_FILE" "$LOG_FILE" "$WATCHDOG_PID_FILE" \
   "$SERVER_PID_FILE" "$HEARTBEAT_FILE" "$STATUS_FILE" "$ROOT" "$STARTED_AT" \
