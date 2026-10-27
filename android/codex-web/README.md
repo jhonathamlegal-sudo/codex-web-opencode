@@ -28,9 +28,10 @@ bateria. O launcher mostra cada ação na tela.
 ## Segurança e preservação
 
 Os APKs embarcados são verificados por SHA-256 e pelo certificado oficial
-F-Droid antes da instalação. A origem do projeto e a revisão inicial são
-fixadas no APK; o bootstrap não baixa scripts executáveis aleatórios da
-internet.
+F-Droid antes da instalação. Se uma compilação não tiver os assets locais, o
+fallback baixa os mesmos nomes de versão do repositório F-Droid e repete as
+duas verificações. A origem do projeto e a revisão inicial são fixadas no APK;
+o bootstrap não baixa scripts executáveis aleatórios da internet.
 
 O projeto é instalado em '~/opencode'. Um checkout existente é preservado:
 - origem Git diferente não recebe 'pull';

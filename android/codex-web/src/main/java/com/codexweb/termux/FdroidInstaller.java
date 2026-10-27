@@ -21,8 +21,6 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
-import org.json.JSONArray;
-import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -41,13 +39,13 @@ public final class FdroidInstaller {
 
     public static final Component[] COMPONENTS = new Component[]{
             new Component("Termux", "com.termux", true, "fdroid/com.termux_1022.apk",
-                    "fdd476982cd74f2f00aac12d3683b1fa260a0b2d146411b94e09d773be3a7b56"),
+                    "com.termux_1022.apk", "fdd476982cd74f2f00aac12d3683b1fa260a0b2d146411b94e09d773be3a7b56"),
             new Component("Termux:API", "com.termux.api", false, "fdroid/com.termux.api_1002.apk",
-                    "4497dbbf81906df52e59ed387a5223d225aa0de3aca817cc557a621e4dadda44"),
+                    "com.termux.api_1002.apk", "4497dbbf81906df52e59ed387a5223d225aa0de3aca817cc557a621e4dadda44"),
             new Component("Termux:Boot", "com.termux.boot", false, "fdroid/com.termux.boot_1000.apk",
-                    "6f7cf9b94f539d3efd4af3544ff819947b49395275d8cfa7e5f80de14f3d9cf8"),
+                    "com.termux.boot_1000.apk", "6f7cf9b94f539d3efd4af3544ff819947b49395275d8cfa7e5f80de14f3d9cf8"),
             new Component("Termux:Widget", "com.termux.widget", false, "fdroid/com.termux.widget_1001.apk",
-                    "45fb3f56a7248cb8e14b24b478357e340c63d6cfabb87ff5be94b667ad1688d6")
+                    "com.termux.widget_1001.apk", "45fb3f56a7248cb8e14b24b478357e340c63d6cfabb87ff5be94b667ad1688d6")
     };
 
     public interface Callback {
@@ -61,13 +59,16 @@ public final class FdroidInstaller {
         public final String packageName;
         public final boolean required;
         public final String assetName;
+        public final String remoteApkName;
         public final String sha256;
 
-        Component(String name, String packageName, boolean required, String assetName, String sha256) {
+        Component(String name, String packageName, boolean required, String assetName,
+                  String remoteApkName, String sha256) {
             this.name = name;
             this.packageName = packageName;
             this.required = required;
             this.assetName = assetName;
+            this.remoteApkName = remoteApkName;
             this.sha256 = sha256;
         }
     }
@@ -312,36 +313,10 @@ public final class FdroidInstaller {
     }
 
     private File downloadFromFdroid(Component component) throws Exception {
-        HttpURLConnection metadata = connection("https://f-droid.org/api/v1/packages/" + component.packageName);
-        JSONObject json;
-        try (InputStream input = metadata.getInputStream()) {
-            json = new JSONObject(readAll(input));
-        } finally {
-            metadata.disconnect();
-        }
-        int versionCode = json.optInt("suggestedVersionCode", -1);
-        String apkName = json.optString("suggestedApk", "");
-        String expectedHash = json.optString("suggestedHash", "");
-        JSONArray packages = json.optJSONArray("packages");
-        if (packages != null) {
-            for (int i = 0; i < packages.length(); i++) {
-                JSONObject candidate = packages.optJSONObject(i);
-                if (candidate == null) continue;
-                int candidateVersion = candidate.optInt("versionCode", -1);
-                if (candidateVersion >= versionCode) {
-                    versionCode = candidateVersion;
-                    apkName = candidate.optString("apkName", "");
-                    expectedHash = candidate.optString("hash", candidate.optString("sha256", ""));
-                }
-            }
-        }
-        if (versionCode < 0) throw new IOException("versão do F-Droid não encontrada");
-        if (apkName.isEmpty()) apkName = component.packageName + "_" + versionCode + ".apk";
-        if (expectedHash.isEmpty()) throw new IOException("F-Droid não forneceu SHA-256 para o APK");
         File directory = new File(context.getCacheDir(), "fdroid");
         if (!directory.exists() && !directory.mkdirs()) throw new IOException("não foi possível criar o cache");
-        File output = new File(directory, component.packageName + "_" + versionCode + ".apk");
-        HttpURLConnection apk = connection("https://f-droid.org/repo/" + apkName);
+        File output = new File(directory, component.remoteApkName);
+        HttpURLConnection apk = connection("https://f-droid.org/repo/" + component.remoteApkName);
         try (InputStream input = apk.getInputStream(); OutputStream out = new FileOutputStream(output)) {
             byte[] buffer = new byte[32 * 1024];
             int count;
@@ -349,7 +324,7 @@ public final class FdroidInstaller {
         } finally {
             apk.disconnect();
         }
-        verifyArchive(component, output, expectedHash);
+        verifyArchive(component, output, component.sha256);
         return output;
     }
 
